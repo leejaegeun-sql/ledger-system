@@ -553,10 +553,16 @@ an injected mutable `Clock` so tests can cross month ends.
   including the 74.16 FX example and a HALF_EVEN tie. Every 400/404/409/422 path is checked to write nothing:
   the `transactions` and `entries` row counts and every account balance, system accounts included, are the
   same before and after. JSON number amounts that a round trip through `double` would change are rejected.
+- **Atomicity.** `PostingRollbackIT` makes a transfer fail after it has started writing: on the second entry
+  insert, on the second balance update, and in each `PostingAssertions` check (500
+  `ledger-invariant-violation`). Row counts, every balance and the idempotency key are unchanged afterwards, and
+  once the fault is removed the same key succeeds. Faults are injected with `@MockitoSpyBean` on the
+  repositories, so production code has no test hooks.
 - **Concurrency, with integrity OK afterwards.** Every concurrency test ends with `GET /ledger/integrity`
   returning `OK` with no discrepancies:
   - 200 random concurrent transfers between two accounts in both directions: nothing lost;
   - 10 concurrent transfers of 30.00 out of 100.00: exactly 3 succeed, the rest get 422;
+  - 20 senders paying one recipient at once: the recipient gets exactly the sum, each sender is debited once;
   - 50 threads making same-currency and FX transfers among a few accounts: no deadlock, exact final balances;
   - 20 concurrent identical transfers: one transaction, and every caller gets the same 201;
   - the "uses up the funds" race: concurrent duplicates all replay, none get 422;

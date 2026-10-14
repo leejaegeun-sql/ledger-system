@@ -98,6 +98,47 @@ class TransferConcurrencyIT extends FreshDatabaseTestBase {
     }
 
     /**
+     * 20 senders pay one recipient at once, so every transfer locks the recipient. Each sends a different
+     * amount (1.01 to 1.20), so a debit applied twice or to the wrong sender can't cancel out.
+     */
+    @Test
+    void twentySendersPayingOneRecipientAtOnce_recipientGetsExactlyTheSum() throws Exception {
+        UUID recipient = createAccount("Recipient", "SGD");
+        List<UUID> senders = new ArrayList<>();
+        List<BigDecimal> amounts = new ArrayList<>();
+        for (int i = 1; i <= 20; i++) {
+            UUID sender = createAccount("Sender " + i, "SGD");
+            fund(sender, "50.00");
+            senders.add(sender);
+            amounts.add(BigDecimal.valueOf(100 + i, 2));
+        }
+
+        List<Callable<TransferResult>> calls = new ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            UUID sender = senders.get(i);
+            BigDecimal amount = amounts.get(i);
+            calls.add(() -> send(sender, recipient, amount));
+        }
+        List<TransferResult> results = runTogether(calls);
+
+        assertThat(results).allSatisfy(r -> assertThat(r.status()).as(r.body()).isEqualTo(201));
+        assertThat(balance(recipient)).isEqualByComparingTo("22.10");
+        assertThat(sumOfEntries(recipient)).isEqualByComparingTo("22.10");
+        assertThat(entryAmounts(recipient)).hasSize(20);
+        for (int i = 0; i < 20; i++) {
+            UUID sender = senders.get(i);
+            BigDecimal amount = amounts.get(i);
+            List<BigDecimal> debits = entryAmounts(sender).stream().filter(a -> a.signum() < 0).toList();
+            assertThat(debits).as("debits of sender %d", i + 1).singleElement()
+                    .satisfies(d -> assertThat(d).isEqualByComparingTo(amount.negate()));
+            assertThat(balance(sender)).isEqualByComparingTo(new BigDecimal("50.00").subtract(amount));
+            assertThat(sumOfEntries(sender)).isEqualByComparingTo(balance(sender));
+        }
+        assertThat(countRows("transactions")).isEqualTo(40);
+        assertIntegrityOk();
+    }
+
+    /**
      * 50 threads × 10 transfers among four accounts in two currencies, in every direction. FX transfers
      * also lock both FX pools, so lock sets overlap in many different ways: no deadlock, no lost update,
      * final balances exact, and integrity clean.
@@ -168,6 +209,10 @@ class TransferConcurrencyIT extends FreshDatabaseTestBase {
                 .build();
         HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
         return new TransferResult(response.statusCode(), response.body());
+    }
+
+    private List<BigDecimal> entryAmounts(UUID account) {
+        return jdbc.sql("SELECT amount FROM entries WHERE account_id = ?").param(account).query(BigDecimal.class).list();
     }
 
     /** Starting balances plus every entry of every 201 response, for the accounts in {@code initial}. */
