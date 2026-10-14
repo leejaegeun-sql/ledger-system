@@ -200,7 +200,8 @@ class IdempotencyIT extends IntegrationTestBase {
         MockHttpServletResponse first = transfer(alice, bob, "\"30.00\"", key)
                 .andExpect(status().isCreated())
                 .andReturn().getResponse();
-        insertReversalOf(UUID.fromString(JsonPath.read(first.getContentAsString(), "$.id")));
+        reverse(UUID.fromString(JsonPath.read(first.getContentAsString(), "$.id")), newKey())
+                .andExpect(status().isCreated());
 
         MockHttpServletResponse replay = transfer(alice, bob, "\"30.00\"", key)
                 .andExpect(status().isCreated())

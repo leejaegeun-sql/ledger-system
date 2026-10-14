@@ -23,6 +23,10 @@ public final class RequestHasher {
                 + "|amount=" + Money.normalize(amount));
     }
 
+    public static String reversal(UUID transactionId) {
+        return sha256Hex("REVERSAL|transaction=" + transactionId);
+    }
+
     static String sha256Hex(String canonical) {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8));

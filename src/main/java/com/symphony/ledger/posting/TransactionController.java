@@ -16,8 +16,8 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Money-moving endpoints, each requiring an {@code Idempotency-Key} header (DESIGN.md §7.1), and
- * {@code GET /transactions/{id}}.
+ * Money-moving endpoints (deposits, transfers, reversals), each requiring an {@code Idempotency-Key}
+ * header (DESIGN.md §7.1), and {@code GET /transactions/{id}}.
  */
 @RestController
 public class TransactionController {
@@ -59,6 +59,16 @@ public class TransactionController {
                 request.amount());
         return created(idempotently.execute(key, hash, () -> postings.transfer(request.sourceAccountId(),
                 request.destinationAccountId(), request.amount(), key, hash)));
+    }
+
+    /** Has no request body (DESIGN.md §8.8). */
+    @PostMapping("/transactions/{id}/reversals")
+    ResponseEntity<TransactionResponse> reverse(
+            @PathVariable UUID id,
+            @RequestHeader(name = IdempotencyKeys.HEADER, required = false) String idempotencyKey) {
+        String key = IdempotencyKeys.require(idempotencyKey, "POST /transactions/{id}/reversals");
+        String hash = RequestHasher.reversal(id);
+        return created(idempotently.execute(key, hash, () -> postings.reverse(id, key, hash)));
     }
 
     /** The current state: {@code reversedByTransactionId} is filled in once a reversal exists (DESIGN.md §8.6). */

@@ -119,6 +119,43 @@ public class PostingService {
     }
 
     /**
+     * One entry per entry of the original: same account, negated amount, so FX legs are reversed at the
+     * original amounts. The rate is copied for information and never looked up (DESIGN.md §5.4).
+     */
+    @Transactional
+    public Posting reverse(UUID transactionId, String idempotencyKey, String requestHash) {
+        Transaction original = transactions.findById(transactionId)
+                .orElseThrow(() -> LedgerException.transactionNotFound(transactionId));
+        List<Entry> originalEntries = entries.findByTransactionIds(List.of(transactionId));
+        // Entries are append-only, so the lock set can be worked out before locking. System accounts included.
+        List<UUID> lockIds = originalEntries.stream().map(Entry::accountId).distinct().toList();
+
+        Map<UUID, AccountLocker.LockedAccount> locked = locker.lock(lockIds);
+        recheckIdempotencyKey(idempotencyKey);
+
+        if (original.type() == TransactionType.REVERSAL) {
+            throw LedgerException.reversalNotAllowed(transactionId);
+        }
+        // After the locks: a concurrent reversal of the same transaction has committed by now (§7.5).
+        if (transactions.findReversalOf(transactionId).isPresent()) {
+            throw LedgerException.transactionAlreadyReversed();
+        }
+        List<Leg> legs = originalEntries.stream().map(e -> new Leg(e.accountId(), e.amount().negate())).toList();
+        for (Leg leg : legs) {
+            AccountLocker.LockedAccount account = locked.get(leg.accountId());
+            // A transaction touches an account at most once, so each leg is that account's whole change.
+            if (account.type() == AccountType.CUSTOMER && account.balance().add(leg.amount()).signum() < 0) {
+                throw LedgerException.insufficientFunds(account.id(), account.balance(), leg.amount().negate(),
+                        account.currency());
+            }
+        }
+
+        Transaction tx = new Transaction(UUID.randomUUID(), TransactionType.REVERSAL, idempotencyKey, requestHash,
+                transactionId, original.fxRate(), ClockConfig.now(clock));
+        return post(tx, legs, locked);
+    }
+
+    /**
      * Runs after the locks, before any business rule (DESIGN.md §7.4 step 5). A concurrent duplicate that
      * waited on our locks sees the first request's committed row here (READ COMMITTED takes a fresh
      * snapshot per statement) and replays it, instead of failing the funds check the first one used up.

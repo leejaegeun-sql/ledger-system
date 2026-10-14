@@ -847,11 +847,13 @@ HTTP/1.1 200 OK
 | Status | When |
 |---|---|
 | 200 | Rates applied |
-| 400 | Empty list; unsupported currency; base = quote; rate ≤ 0 or more than 10 decimal places; duplicate pair in one request |
+| 400 | `validation-error`: empty list; unsupported currency; base = quote; rate ≤ 0, ≥ 10¹⁰ (the limit of `NUMERIC(20,10)`) or with more than 10 decimal places after `stripTrailingZeros()`; duplicate pair in one request |
+
+The rate is accepted as a JSON string (preferred) or number, like amounts (§3.4). In responses, rates are strings without trailing zeros (`"0.7415"`, not `"0.7415000000"`), the same format as `fxRate` on transactions.
 
 ### 8.10 `GET /exchange-rates`
 
-Returns the rate in effect now for every pair that has one.
+Returns the rate in effect now for every pair that has one, sorted by base and then quote. `asOf` is *now* from the `Clock`.
 
 ```http
 HTTP/1.1 200 OK
@@ -859,8 +861,8 @@ HTTP/1.1 200 OK
 {
   "asOf": "2026-10-14T07:05:00Z",
   "rates": [
-    { "base": "EUR", "quote": "JPY", "rate": "163.0400000000", "effectiveFrom": "1970-01-01T00:00:00Z" },
-    { "base": "SGD", "quote": "USD", "rate": "0.7415000000",   "effectiveFrom": "2026-10-14T07:00:00Z" }
+    { "base": "EUR", "quote": "JPY", "rate": "163.04", "effectiveFrom": "1970-01-01T00:00:00Z" },
+    { "base": "SGD", "quote": "USD", "rate": "0.7415", "effectiveFrom": "2026-10-14T07:00:00Z" }
   ]
 }
 ```
@@ -1144,7 +1146,8 @@ com.symphony.ledger
 │                    IdempotentExecutor, TransactionLookup, RequestHasher, TransactionRepository, EntryRepository,
 │                    AccountLocker (§6.2), PostingAssertions (§5.6)
 │                    AccountHistoryController, AccountHistoryService (§8.7)
-├── fx               ExchangeRateController, ExchangeRateProvider, DatabaseExchangeRateProvider
+├── fx               ExchangeRateController, ExchangeRateService, ExchangeRateRepository,
+│                    ExchangeRateProvider, DatabaseExchangeRateProvider
 ├── integrity        IntegrityController, IntegrityService
 ├── reconciliation   ReconciliationController, ReconciliationService, MonthlyReconciliationJob
 └── common           Money (currency scale, validation, formatting), ClockConfig,

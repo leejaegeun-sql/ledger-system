@@ -2,13 +2,12 @@ package com.symphony.ledger.support;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.jayway.jsonpath.JsonPath;
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -121,40 +120,24 @@ public abstract class IntegrationTestBase {
                 .single();
     }
 
-    /**
-     * Test-only stand-in for a reversal until the reversal endpoint exists, using only what DESIGN.md §4
-     * allows: INSERTs into the append-only tables and UPDATE of {@code accounts.balance}. Posts the
-     * original's entries negated, dated now. Returns the reversal's id.
-     */
-    protected UUID insertReversalOf(UUID originalId) {
-        UUID reversalId = UUID.randomUUID();
-        var now = Instant.now(clock).atOffset(ZoneOffset.UTC);
-        jdbc.sql("""
-                INSERT INTO transactions
-                    (id, type, idempotency_key, request_hash, reverses_transaction_id, fx_rate, created_at)
-                SELECT :id, 'REVERSAL', :key, :hash, id, fx_rate, :now FROM transactions WHERE id = :original
-                """)
-                .param("id", reversalId)
-                .param("key", "test-reversal-" + reversalId)
-                .param("hash", "0".repeat(64))
-                .param("original", originalId)
-                .param("now", now)
-                .update();
-        List<Object[]> legs = jdbc.sql("SELECT account_id, amount, currency FROM entries WHERE transaction_id = ? ORDER BY id")
-                .param(originalId)
-                .query((rs, n) -> new Object[] {rs.getObject(1, UUID.class), rs.getBigDecimal(2), rs.getString(3)})
-                .list();
-        for (Object[] leg : legs) {
-            BigDecimal negated = ((BigDecimal) leg[1]).negate();
-            jdbc.sql("""
-                    INSERT INTO entries (transaction_id, account_id, amount, currency, created_at)
-                    VALUES (?, ?, ?, ?, ?)
-                    """)
-                    .params(reversalId, leg[0], negated, leg[2], now)
-                    .update();
-            jdbc.sql("UPDATE accounts SET balance = balance + ? WHERE id = ?").params(negated, leg[0]).update();
+    /** {@code POST /transactions/{id}/reversals}, which has no body. A null key sends no header. */
+    protected ResultActions reverse(UUID transactionId, String idempotencyKey) throws Exception {
+        var request = post("/transactions/{id}/reversals", transactionId);
+        if (idempotencyKey != null) {
+            request.header("Idempotency-Key", idempotencyKey);
         }
-        return reversalId;
+        return mvc.perform(request);
+    }
+
+    /** {@code PUT /exchange-rates} with {@code body} as the raw JSON request. */
+    protected ResultActions putRates(String body) throws Exception {
+        return mvc.perform(put("/exchange-rates").contentType(MediaType.APPLICATION_JSON).content(body));
+    }
+
+    /** The id of a 201 response's transaction. */
+    protected static UUID createdId(ResultActions posted) throws Exception {
+        String body = posted.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        return UUID.fromString(JsonPath.read(body, "$.id"));
     }
 
     /**

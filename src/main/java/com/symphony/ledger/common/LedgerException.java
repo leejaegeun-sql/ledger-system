@@ -3,6 +3,7 @@ package com.symphony.ledger.common;
 import java.math.BigDecimal;
 import java.util.Currency;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -105,6 +106,19 @@ public class LedgerException extends RuntimeException {
         return new LedgerException(HttpStatus.NOT_FOUND, "transaction-not-found", "Transaction not found",
                 "Transaction " + transactionId + " does not exist.")
                 .with("transactionId", transactionId);
+    }
+
+    public static LedgerException reversalNotAllowed(UUID transactionId) {
+        return new LedgerException(HttpStatus.UNPROCESSABLE_CONTENT, "reversal-not-allowed", "Reversal not allowed",
+                "Transaction " + transactionId + " is itself a reversal, and reversals cannot be reversed.")
+                .with("transactionId", transactionId);
+    }
+
+    /** The same shape as a bean-validation failure: {@code errors: [{field, message}]}. */
+    public static LedgerException validationError(String field, String message) {
+        return new LedgerException(HttpStatus.BAD_REQUEST, "validation-error", "Validation failed",
+                "The request body is invalid.")
+                .with("errors", List.of(Map.of("field", field, "message", message)));
     }
 
     public static LedgerException idempotencyKeyReused() {

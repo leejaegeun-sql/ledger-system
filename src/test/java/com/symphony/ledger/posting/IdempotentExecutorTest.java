@@ -22,8 +22,9 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 
 /**
- * How {@link IdempotentExecutor} turns each outcome of a posting into a result (DESIGN.md §7.4). The
- * reversal constraint can't be violated through the API yet, so its branch is covered here.
+ * How {@link IdempotentExecutor} turns each outcome of a posting into a result (DESIGN.md §7.4). Through
+ * the API the "already reversed" check after the locks answers first, so the reversal constraint's branch
+ * (the backstop) is covered here.
  */
 class IdempotentExecutorTest {
 
