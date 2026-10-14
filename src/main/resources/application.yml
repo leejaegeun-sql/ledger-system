@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: ledger
+  datasource:
+    url: jdbc:postgresql://localhost:5432/ledger
+    username: ledger
+    password: ledger
+  flyway:
+    locations: classpath:db/migration
+  jackson:
+    deserialization:
+      use-big-decimal-for-floats: true
+  mvc:
+    problemdetails:
+      enabled: true
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
