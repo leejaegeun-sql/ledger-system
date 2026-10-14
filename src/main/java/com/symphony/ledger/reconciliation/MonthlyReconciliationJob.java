@@ -8,9 +8,10 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Reconciles the previous month at 00:05 UTC on the 1st (DESIGN.md §12.4), the moment the period closes
- * ({@link ReconciliationPeriod#GRACE}). The five minutes cover postings that took their {@code created_at} just
- * before midnight but commit just after. Runs only when
+ * Reconciles the previous month at 00:06 UTC on the 1st (DESIGN.md §12.4). The period closes at 00:05
+ * ({@link ReconciliationPeriod#GRACE}), which covers postings that took their {@code created_at} just before
+ * midnight but commit just after. The extra minute means a scheduler firing slightly early still runs after the
+ * period has closed, instead of getting {@code period-not-closed}. Runs only when
  * {@link SchedulingConfig} is on; tests call {@link #reconcilePreviousMonth()} directly.
  */
 @Component
@@ -27,7 +28,7 @@ public class MonthlyReconciliationJob {
     }
 
     /** No automatic retry: a failure is logged at ERROR, and the month can be reconciled manually. */
-    @Scheduled(cron = "${ledger.reconciliation.cron:0 5 0 1 * *}", zone = "UTC")
+    @Scheduled(cron = "${ledger.reconciliation.cron:0 6 0 1 * *}", zone = "UTC")
     public void reconcilePreviousMonth() {
         ReconciliationPeriod period = ReconciliationPeriod.containing(clock.instant()).previous();
         try {

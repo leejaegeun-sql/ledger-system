@@ -1185,11 +1185,12 @@ What each check catches. Entries are append-only, so most of these can only fail
 ### 12.4 Scheduled job
 
 ```java
-@Scheduled(cron = "${ledger.reconciliation.cron:0 5 0 1 * *}", zone = "UTC")
+@Scheduled(cron = "${ledger.reconciliation.cron:0 6 0 1 * *}", zone = "UTC")
 ```
 
-- Runs at **00:05 UTC** on the 1st of each month and reconciles the previous month, computed with the `Clock`.
-- 00:05 is the moment the previous month closes (§12.1). The 5-minute delay **[added]** covers write transactions that took their `created_at` just before midnight but commit just after. Without it, the job could snapshot the month before those entries are visible. A later re-run would then report a false `SNAPSHOT_MISMATCH`. Manual runs get the same delay.
+- Runs at **00:06 UTC** on the 1st of each month and reconciles the previous month, computed with the `Clock`.
+- The previous month closes at 00:05 (§12.1). The 5-minute delay **[added]** covers write transactions that took their `created_at` just before midnight but commit just after. Without it, the job could snapshot the month before those entries are visible. A later re-run would then report a false `SNAPSHOT_MISMATCH`. Manual runs get the same delay.
+- The job runs a minute later still, at 00:06 **[added]**, so it can never fire before the period closes. A scheduler's trigger and the application `Clock` can disagree by a few milliseconds. At exactly 00:05, a run that fired slightly early would get 422 `period-not-closed`, and that month's scheduled reconciliation would be lost.
 - The run is recorded with `trigger = SCHEDULED`.
 - If it gets 409, it logs and returns, because another run has the period.
 - Failures are logged at ERROR. There is no automatic retry.
@@ -1327,7 +1328,7 @@ How each integrity check is triggered in tests:
 16. Account history lists entries oldest first and supports offset pagination.
 17. "Timestamp" for ordering and periods means the transaction's `created_at` from the application `Clock`, not the database commit time. Under concurrency, history order may differ slightly from commit order.
 18. Month-end means the UTC calendar month, whatever the customer's local time zone.
-19. If the app is down at 00:05 UTC on the 1st, that month's scheduled reconciliation is missed. It can be run manually. There is no catch-up.
+19. If the app is down at 00:06 UTC on the 1st, that month's scheduled reconciliation is missed. It can be run manually. There is no catch-up.
 20. The first reconciliation of an account (no previous snapshot) uses an opening balance computed from entries. That is reported as `openingSource = COMPUTED` on the account's line in the report (§12.2), not as a discrepancy.
 21. The integrity check and reconciliation report discrepancies but never repair them.
 22. Both run synchronously and scan everything, which is acceptable at this project's data sizes.
@@ -1381,7 +1382,7 @@ All accepted at review on 2026-10-14, along with `JdbcClient` and oldest-first h
     - existing snapshots are never overwritten;
     - `entry_count` is stored alongside the closing balance;
     - concurrent runs are handled;
-    - a period closes 5 minutes after it ends, for manual runs and the job (which runs at 00:05), to allow for late commits. (§12)
+    - a period closes 5 minutes after it ends, for manual runs and the job, to allow for late commits; the job runs at 00:06, a minute after that. (§12)
 13. **Timestamp precision.** Values are truncated to microseconds so that they still compare equal after a round trip through PostgreSQL. (§3.5)
 14. **Account history.** The order is ascending, with entry `id` breaking ties. Each item carries source and destination so it makes sense on its own. (§8.7)
 15. **Amount format and limits.** Amounts are JSON strings in responses. Trailing zeros are allowed. The maximum is 10¹². (§3.4)

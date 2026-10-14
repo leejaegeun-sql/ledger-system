@@ -45,7 +45,7 @@ class ReconciliationPeriodTest {
         assertThat(ReconciliationPeriod.parse("2027-01").previous()).isEqualTo(december);
     }
 
-    /** Closed five minutes after the month ends, the same grace as the scheduled job (DESIGN.md §12.1, §12.4). */
+    /** Closed five minutes after the month ends, for manual and scheduled runs alike (DESIGN.md §12.1, §12.4). */
     @Test
     void closed_onlyFiveMinutesAfterTheMonthHasEnded() {
         ReconciliationPeriod october = ReconciliationPeriod.parse("2026-10");

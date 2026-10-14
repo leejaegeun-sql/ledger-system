@@ -333,14 +333,14 @@ class ReconciliationIT extends FreshDatabaseTestBase {
         mvc.perform(get("/reconciliations/{id}", "not-a-uuid")).andExpect(status().isBadRequest());
     }
 
-    /** Called directly: at 00:05 UTC on 1 November it reconciles October, recorded as SCHEDULED (§12.4). */
+    /** Called directly: at 00:06 UTC on 1 November it reconciles October, recorded as SCHEDULED (§12.4). */
     @Test
     void scheduledJob_calledDirectly_reconcilesThePreviousMonth() throws Exception {
         clock.set(Instant.parse("2026-10-10T09:00:00Z"));
         UUID alice = createAccount("Alice", "SGD");
         fund(alice, "100.00");
 
-        clock.set(Instant.parse("2026-11-01T00:05:00Z"));
+        clock.set(Instant.parse("2026-11-01T00:06:00Z"));
         job.reconcilePreviousMonth();
 
         List<Map<String, Object>> runs = jdbc.sql("SELECT id, period::text AS period FROM reconciliations")
@@ -352,7 +352,7 @@ class ReconciliationIT extends FreshDatabaseTestBase {
                 .andExpect(jsonPath("$.period").value("2026-10"))
                 .andExpect(jsonPath("$.trigger").value("SCHEDULED"))
                 .andExpect(jsonPath("$.status").value("BALANCED"))
-                .andExpect(jsonPath("$.createdAt").value("2026-11-01T00:05:00Z"));
+                .andExpect(jsonPath("$.createdAt").value("2026-11-01T00:06:00Z"));
         assertSnapshot(snapshots("2026-10-01").get(alice), "100.00", 1);
     }
 

@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import com.symphony.ledger.common.LedgerException;
 import com.symphony.ledger.support.MutableClock;
 import java.lang.reflect.Method;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
@@ -21,7 +22,7 @@ import org.springframework.scheduling.support.CronExpression;
 class MonthlyReconciliationJobTest {
 
     private final ReconciliationService reconciliations = mock(ReconciliationService.class);
-    private final MutableClock clock = new MutableClock(Instant.parse("2026-11-01T00:05:00Z"));
+    private final MutableClock clock = new MutableClock(Instant.parse("2026-11-01T00:06:00Z"));
     private final MonthlyReconciliationJob job = new MonthlyReconciliationJob(reconciliations, clock);
 
     @Test
@@ -29,7 +30,7 @@ class MonthlyReconciliationJobTest {
         job.reconcilePreviousMonth();
         verify(reconciliations).reconcile(ReconciliationPeriod.parse("2026-10"), Trigger.SCHEDULED);
 
-        clock.set(Instant.parse("2027-01-01T00:05:00Z"));
+        clock.set(Instant.parse("2027-01-01T00:06:00Z"));
         job.reconcilePreviousMonth();
         verify(reconciliations).reconcile(ReconciliationPeriod.parse("2026-12"), Trigger.SCHEDULED);
     }
@@ -51,18 +52,20 @@ class MonthlyReconciliationJobTest {
         verify(reconciliations).reconcile(any(), any());
     }
 
-    /** 00:05 UTC on the 1st of each month, overridable by {@code ledger.reconciliation.cron}. */
+    /** 00:06 UTC on the 1st of each month, overridable by {@code ledger.reconciliation.cron}. */
     @Test
-    void schedule_isFiveMinutesPastMidnightUtcOnTheFirst() throws Exception {
+    void schedule_isSixMinutesPastMidnightUtcOnTheFirst() throws Exception {
         Method method = MonthlyReconciliationJob.class.getMethod("reconcilePreviousMonth");
         Scheduled scheduled = method.getAnnotation(Scheduled.class);
 
-        assertThat(scheduled.cron()).isEqualTo("${ledger.reconciliation.cron:0 5 0 1 * *}");
+        assertThat(scheduled.cron()).isEqualTo("${ledger.reconciliation.cron:0 6 0 1 * *}");
         assertThat(scheduled.zone()).isEqualTo("UTC");
-        ZonedDateTime next = CronExpression.parse("0 5 0 1 * *")
+        ZonedDateTime next = CronExpression.parse("0 6 0 1 * *")
                 .next(ZonedDateTime.parse("2026-10-14T06:30:00Z").withZoneSameInstant(ZoneOffset.UTC));
-        assertThat(next.toInstant()).isEqualTo(Instant.parse("2026-11-01T00:05:00Z"));
-        // The job runs the moment the previous month closes, not before (§12.1).
-        assertThat(next.toInstant()).isEqualTo(ReconciliationPeriod.parse("2026-10").closesAt());
+        assertThat(next.toInstant()).isEqualTo(Instant.parse("2026-11-01T00:06:00Z"));
+        // A full minute after the previous month closes (§12.1), so a scheduler firing slightly early is still
+        // past the grace period.
+        assertThat(next.toInstant())
+                .isEqualTo(ReconciliationPeriod.parse("2026-10").closesAt().plus(Duration.ofMinutes(1)));
     }
 }

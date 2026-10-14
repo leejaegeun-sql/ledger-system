@@ -16,7 +16,7 @@ public record ReconciliationPeriod(YearMonth month) {
 
     /**
      * How long after its end a period stays open: postings that took their {@code created_at} just before
-     * midnight may still be committing (DESIGN.md §12.1). The scheduled job runs at the end of it (§12.4).
+     * midnight may still be committing (DESIGN.md §12.1). The scheduled job runs a minute after it (§12.4).
      */
     public static final Duration GRACE = Duration.ofMinutes(5);
 
