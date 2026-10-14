@@ -13,7 +13,10 @@ Java 21, PostgreSQL 17, Flyway, `JdbcClient`, springdoc-openapi, JUnit 5 + Testc
 
 ## Running
 
-Requires a JDK 21 (with `javac`) and Docker.
+Prerequisites:
+
+- JDK 21 (not just a JRE)
+- Docker
 
 ```sh
 docker compose up -d          # PostgreSQL 17 on localhost:5432

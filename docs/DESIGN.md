@@ -361,8 +361,8 @@ Steps inside the method:
 
 1. **Resolve the accounts.**
    - Read the accounts named in the request, without locks. Unknown → 404.
-   - Reject `SYSTEM` accounts → 422.
    - Validate the amount's decimal places against the source currency → 400.
+   - Reject `SYSTEM` accounts → 422. This comes after the 400 check, following the order in §9: request validation before business rules.
    - Work out the full set of account IDs to lock, from §5. `currency` and `type` never change, so it is safe to read them before locking.
 2. **Lock** all of those IDs in one statement (§6.2).
 3. **Re-check idempotency** (§7.4, step 5).
@@ -380,10 +380,12 @@ Any exception rolls back the whole transaction. For an insufficient-funds 422, n
 ```sql
 SELECT id, currency, type, balance
 FROM accounts
-WHERE id = ANY(:ids)
+WHERE id IN (:ids)
 ORDER BY id
 FOR UPDATE;
 ```
+
+`IN (:ids)` is `JdbcClient` expanding the ID collection into one placeholder per ID. It is equivalent to `id = ANY(:ids)` and avoids binding a `uuid[]`. What matters is that this is one statement with `ORDER BY id`.
 
 - **The ordering is done in SQL, in one statement.** PostgreSQL's locking step runs above the sort, so rows are locked in ascending `uuid` order.
 - **Do not sort the IDs in Java and lock them one by one.** `java.util.UUID.compareTo` compares signed 64-bit halves. PostgreSQL compares `uuid` as unsigned bytes. The two orders differ, and mixing them can deadlock.
