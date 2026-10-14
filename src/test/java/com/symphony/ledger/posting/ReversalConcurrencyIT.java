@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.jayway.jsonpath.JsonPath;
 import com.symphony.ledger.support.Concurrently;
-import com.symphony.ledger.support.IntegrationTestBase;
+import com.symphony.ledger.support.FreshDatabaseTestBase;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -21,10 +21,11 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 
 /**
  * Concurrent reversals of one transaction through the real HTTP API (DESIGN.md §5.4, §7.5, §14.2).
- * Requests are released together with a latch.
+ * Requests are released together with a latch. Each test runs on its own database and ends with a clean
+ * integrity check.
  */
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-class ReversalConcurrencyIT extends IntegrationTestBase {
+class ReversalConcurrencyIT extends FreshDatabaseTestBase {
 
     @Value("${local.server.port}")
     private int port;
@@ -58,6 +59,7 @@ class ReversalConcurrencyIT extends IntegrationTestBase {
         assertThat(balance(bob)).isEqualByComparingTo("0");
         assertThat(sumOfEntries(alice)).isEqualByComparingTo("500.00");
         assertThat(sumOfEntries(bob)).isEqualByComparingTo("0");
+        assertIntegrityOk();
     }
 
     /**
@@ -85,6 +87,7 @@ class ReversalConcurrencyIT extends IntegrationTestBase {
         assertThat(reversalsOf(original)).isEqualTo(1);
         assertThat(balance(alice)).isEqualByComparingTo("100.00");
         assertThat(balance(bob)).isEqualByComparingTo("0");
+        assertIntegrityOk();
     }
 
     private record Result(int status, String replayed, String body) {

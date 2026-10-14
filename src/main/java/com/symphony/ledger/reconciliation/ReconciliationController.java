@@ -45,13 +45,29 @@ public class ReconciliationController {
     }
 
     record ReconciliationResponse(UUID id, String period, Instant periodStart, Instant periodEnd, Trigger trigger,
-            ReconciliationReport.Status status, int accountsChecked, int snapshotsCreated, int snapshotsVerified,
-            Instant createdAt, List<DiscrepancyResponse> discrepancies) {
+            ReconciliationReport.Status status, int accountsChecked, int accountsMatched,
+            int accountsWithDiscrepancies, int snapshotsCreated, int snapshotsVerified, Instant createdAt,
+            List<AccountLineResponse> accounts, List<DiscrepancyResponse> discrepancies) {
 
         static ReconciliationResponse from(ReconciliationReport r) {
             return new ReconciliationResponse(r.id(), r.period().toString(), r.period().start(), r.period().end(),
-                    r.trigger(), r.status(), r.accountsChecked(), r.snapshotsCreated(), r.snapshotsVerified(),
-                    r.createdAt(), r.discrepancies().stream().map(DiscrepancyResponse::from).toList());
+                    r.trigger(), r.status(), r.accountsChecked(), r.accountsMatched(), r.accountsWithDiscrepancies(),
+                    r.snapshotsCreated(), r.snapshotsVerified(), r.createdAt(),
+                    r.accounts().stream().map(AccountLineResponse::from).toList(),
+                    r.discrepancies().stream().map(DiscrepancyResponse::from).toList());
+        }
+    }
+
+    /** Amounts at the account's currency scale. */
+    record AccountLineResponse(UUID accountId, String currency, String openingBalance,
+            ReconciliationReport.OpeningSource openingSource, String movement, String closingBalance,
+            ReconciliationReport.SnapshotResult snapshot, ReconciliationReport.AccountStatus status) {
+
+        static AccountLineResponse from(ReconciliationReport.AccountLine a) {
+            return new AccountLineResponse(a.accountId(), a.currency().getCurrencyCode(),
+                    Money.formatLenient(a.openingBalance(), a.currency()), a.openingSource(),
+                    Money.formatLenient(a.movement(), a.currency()),
+                    Money.formatLenient(a.closingBalance(), a.currency()), a.snapshot(), a.status());
         }
     }
 

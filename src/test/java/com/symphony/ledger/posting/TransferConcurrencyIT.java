@@ -3,7 +3,7 @@ package com.symphony.ledger.posting;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.jayway.jsonpath.JsonPath;
-import com.symphony.ledger.support.IntegrationTestBase;
+import com.symphony.ledger.support.FreshDatabaseTestBase;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -30,10 +30,10 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 /**
  * Concurrent transfers through the real HTTP API (DESIGN.md §6.2, §14.2). Each test starts every request
  * on its own thread and releases them together with a {@link CountDownLatch}. Every request carries a
- * fresh Idempotency-Key.
+ * fresh Idempotency-Key. Each test runs on its own database and ends with a clean integrity check.
  */
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-class TransferConcurrencyIT extends IntegrationTestBase {
+class TransferConcurrencyIT extends FreshDatabaseTestBase {
 
     @Value("${local.server.port}")
     private int port;
@@ -70,6 +70,7 @@ class TransferConcurrencyIT extends IntegrationTestBase {
             assertThat(balance(account)).isEqualByComparingTo(expected.get(account));
             assertThat(balance(account)).isNotNegative();
         }
+        assertIntegrityOk();
     }
 
     @Test
@@ -93,12 +94,13 @@ class TransferConcurrencyIT extends IntegrationTestBase {
         assertThat(balance(bob)).isEqualByComparingTo("90.00");
         assertThat(sumOfEntries(alice)).isEqualByComparingTo("10.00");
         assertThat(sumOfEntries(bob)).isEqualByComparingTo("90.00");
+        assertIntegrityOk();
     }
 
     /**
      * 50 threads × 10 transfers among four accounts in two currencies, in every direction. FX transfers
      * also lock both FX pools, so lock sets overlap in many different ways: no deadlock, no lost update,
-     * final balances exact, and every transaction balanced.
+     * final balances exact, and integrity clean.
      */
     @Test
     void fiftyThreadsTransferringAmongFewAccounts_noDeadlockAndBalancesExact() throws Exception {
@@ -142,25 +144,9 @@ class TransferConcurrencyIT extends IntegrationTestBase {
             assertThat(balance(account)).isEqualByComparingTo(sumOfEntries(account));
             assertThat(balance(account)).isNotNegative();
         }
-        List<String> unbalanced = jdbc.sql("""
-                SELECT transaction_id || ' ' || currency
-                FROM entries
-                WHERE transaction_id IN (SELECT transaction_id FROM entries WHERE account_id IN (:ids))
-                GROUP BY transaction_id, currency
-                HAVING SUM(amount) <> 0
-                """)
-                .param("ids", accounts)
-                .query(String.class)
-                .list();
-        assertThat(unbalanced).isEmpty();
         long successful = results.stream().filter(r -> r.status() == 201).count();
-        long transactions = jdbc.sql("""
-                SELECT COUNT(DISTINCT transaction_id) FROM entries WHERE account_id IN (:ids)
-                """)
-                .param("ids", accounts)
-                .query(Long.class)
-                .single();
-        assertThat(transactions).isEqualTo(accounts.size() + successful);
+        assertThat(countRows("transactions")).isEqualTo(accounts.size() + successful);
+        assertIntegrityOk();
     }
 
     private record TransferResult(int status, String body) {

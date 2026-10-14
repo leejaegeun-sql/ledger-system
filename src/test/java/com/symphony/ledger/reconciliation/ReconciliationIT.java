@@ -63,12 +63,24 @@ class ReconciliationIT extends FreshDatabaseTestBase {
                 .andExpect(jsonPath("$.trigger").value("MANUAL"))
                 .andExpect(jsonPath("$.status").value("BALANCED"))
                 .andExpect(jsonPath("$.accountsChecked").value(SYSTEM_ACCOUNTS + 1))
+                .andExpect(jsonPath("$.accountsMatched").value(SYSTEM_ACCOUNTS + 1))
+                .andExpect(jsonPath("$.accountsWithDiscrepancies").value(0))
                 .andExpect(jsonPath("$.snapshotsCreated").value(SYSTEM_ACCOUNTS + 1))
                 .andExpect(jsonPath("$.snapshotsVerified").value(0))
                 .andExpect(jsonPath("$.createdAt").value("2026-10-02T09:00:00Z"))
                 .andExpect(jsonPath("$.discrepancies").isEmpty())
                 .andReturn().getResponse().getContentAsString();
         UUID id = UUID.fromString(JsonPath.read(body, "$.id"));
+
+        // One line per account checked. No previous snapshot, so every opening is computed from entries.
+        assertThat(JsonPath.<List<String>>read(body, "$.accounts[*].accountId"))
+                .hasSize(SYSTEM_ACCOUNTS + 1).doesNotContain(carol.toString());
+        assertThat(accountLine(body, alice))
+                .isEqualTo(line(alice, "SGD", "0.00", "COMPUTED", "100.00", "100.00", "CREATED", "MATCHED"));
+        assertThat(accountLine(body, EXTERNAL_SGD))
+                .isEqualTo(line(EXTERNAL_SGD, "SGD", "0.00", "COMPUTED", "-100.00", "-100.00", "CREATED", "MATCHED"));
+        assertThat(accountLine(body, FX_POOL_SGD))
+                .isEqualTo(line(FX_POOL_SGD, "SGD", "0.00", "COMPUTED", "0.00", "0.00", "CREATED", "MATCHED"));
 
         Map<UUID, Snapshot> snapshots = snapshots("2026-09-01");
         assertThat(snapshots).hasSize(SYSTEM_ACCOUNTS + 1).doesNotContainKey(carol);
@@ -89,13 +101,19 @@ class ReconciliationIT extends FreshDatabaseTestBase {
 
         clock.set(Instant.parse("2026-10-03T09:00:00Z"));
         fund(alice, "50.00");
-        reconcile("2026-09")
+        String rerun = reconcile("2026-09")
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("BALANCED"))
                 .andExpect(jsonPath("$.accountsChecked").value(SYSTEM_ACCOUNTS + 1))
+                .andExpect(jsonPath("$.accountsMatched").value(SYSTEM_ACCOUNTS + 1))
+                .andExpect(jsonPath("$.accountsWithDiscrepancies").value(0))
                 .andExpect(jsonPath("$.snapshotsCreated").value(0))
                 .andExpect(jsonPath("$.snapshotsVerified").value(SYSTEM_ACCOUNTS + 1))
-                .andExpect(jsonPath("$.discrepancies").isEmpty());
+                .andExpect(jsonPath("$.discrepancies").isEmpty())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(JsonPath.<List<String>>read(rerun, "$.accounts[*].snapshot")).containsOnly("MATCHED");
+        assertThat(accountLine(rerun, alice))
+                .isEqualTo(line(alice, "SGD", "0.00", "COMPUTED", "100.00", "100.00", "MATCHED", "MATCHED"));
 
         assertThat(snapshots("2026-09-01")).isEqualTo(stored);
         assertThat(countRows("reconciliations")).isEqualTo(2);
@@ -121,13 +139,20 @@ class ReconciliationIT extends FreshDatabaseTestBase {
         assertSnapshot(snapshots("2026-09-01").get(bob), "0", 0);
 
         clock.set(Instant.parse("2026-11-02T09:00:00Z"));
-        reconcile("2026-10")
+        String october = reconcile("2026-10")
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("BALANCED"))
                 .andExpect(jsonPath("$.periodStart").value("2026-10-01T00:00:00Z"))
                 .andExpect(jsonPath("$.periodEnd").value("2026-11-01T00:00:00Z"))
                 .andExpect(jsonPath("$.snapshotsCreated").value(SYSTEM_ACCOUNTS + 2))
-                .andExpect(jsonPath("$.discrepancies").isEmpty());
+                .andExpect(jsonPath("$.discrepancies").isEmpty())
+                .andReturn().getResponse().getContentAsString();
+        // October opens from September's snapshot: 101.00 + (2.00 − 30.00) = 73.00.
+        assertThat(JsonPath.<List<String>>read(october, "$.accounts[*].openingSource")).containsOnly("SNAPSHOT");
+        assertThat(accountLine(october, alice))
+                .isEqualTo(line(alice, "SGD", "101.00", "SNAPSHOT", "-28.00", "73.00", "CREATED", "MATCHED"));
+        assertThat(accountLine(october, bob))
+                .isEqualTo(line(bob, "SGD", "0.00", "SNAPSHOT", "30.00", "30.00", "CREATED", "MATCHED"));
         assertSnapshot(snapshots("2026-10-01").get(alice), "73.00", 4);
         assertSnapshot(snapshots("2026-10-01").get(bob), "30.00", 1);
     }
@@ -162,7 +187,13 @@ class ReconciliationIT extends FreshDatabaseTestBase {
         String rerun = reconcile("2026-09")
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("DISCREPANCIES_FOUND"))
+                .andExpect(jsonPath("$.accountsMatched").value(SYSTEM_ACCOUNTS - 1))
+                .andExpect(jsonPath("$.accountsWithDiscrepancies").value(2))
                 .andReturn().getResponse().getContentAsString();
+        assertThat(accountLine(rerun, alice)).isEqualTo(
+                line(alice, "SGD", "0.00", "COMPUTED", "110.00", "110.00", "MISMATCHED", "DISCREPANCIES_FOUND"));
+        assertThat(accountLine(rerun, EXTERNAL_SGD)).isEqualTo(line(EXTERNAL_SGD, "SGD", "0.00", "COMPUTED",
+                "-110.00", "-110.00", "MISMATCHED", "DISCREPANCIES_FOUND"));
         assertThat(discrepancies(rerun)).containsExactlyInAnyOrder(
                 discrepancy("SNAPSHOT_MISMATCH", alice, "100.00", "110.00",
                         "Stored closing 100.00 (1 entry); recomputed 110.00 (2 entries)"),
@@ -185,6 +216,10 @@ class ReconciliationIT extends FreshDatabaseTestBase {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("DISCREPANCIES_FOUND"))
                 .andReturn().getResponse().getContentAsString();
+        assertThat(accountLine(october, alice)).isEqualTo(
+                line(alice, "SGD", "100.00", "SNAPSHOT", "0.00", "110.00", "CREATED", "DISCREPANCIES_FOUND"));
+        assertThat(accountLine(october, EXTERNAL_SGD)).isEqualTo(line(EXTERNAL_SGD, "SGD", "-100.00", "SNAPSHOT",
+                "0.00", "-110.00", "CREATED", "DISCREPANCIES_FOUND"));
         assertThat(withoutDetail(discrepancies(october))).containsExactlyInAnyOrder(
                 Map.of("kind", "ROLLFORWARD_MISMATCH", "accountId", alice.toString(),
                         "expected", "100.00", "actual", "110.00"),
@@ -210,6 +245,9 @@ class ReconciliationIT extends FreshDatabaseTestBase {
         assertThat(withoutDetail(discrepancies(body))).containsExactly(
                 Map.of("kind", "CACHED_BALANCE_MISMATCH", "accountId", alice.toString(),
                         "expected", "100.00", "actual", "110.00"));
+        assertThat(accountLine(body, alice)).isEqualTo(
+                line(alice, "SGD", "0.00", "COMPUTED", "100.00", "100.00", "CREATED", "DISCREPANCIES_FOUND"));
+        assertThat(JsonPath.<List<Object>>read(body, "$.accounts")).hasSize(SYSTEM_ACCOUNTS + 1);
 
         clock.set(Instant.parse("2026-10-03T09:00:00Z"));
         String fetched = mvc.perform(get("/reconciliations/{id}", id))
@@ -239,6 +277,8 @@ class ReconciliationIT extends FreshDatabaseTestBase {
         negative.put("accountId", alice.toString());
         negative.put("expected", null);
         negative.put("actual", "-50.00");
+        assertThat(accountLine(body, alice)).isEqualTo(
+                line(alice, "SGD", "0.00", "COMPUTED", "-50.00", "-50.00", "CREATED", "DISCREPANCIES_FOUND"));
         assertThat(withoutDetail(discrepancies(body))).containsExactlyInAnyOrder(
                 negative,
                 Map.of("kind", "CACHED_BALANCE_MISMATCH", "accountId", alice.toString(),
@@ -334,6 +374,20 @@ class ReconciliationIT extends FreshDatabaseTestBase {
             copy.remove("detail");
             return copy;
         }).toList();
+    }
+
+    /** The report's line for {@code accountId}. */
+    private static Map<String, Object> accountLine(String body, UUID accountId) {
+        List<Map<String, Object>> lines = JsonPath.read(body, "$.accounts[?(@.accountId == '" + accountId + "')]");
+        assertThat(lines).as("line for " + accountId).hasSize(1);
+        return lines.getFirst();
+    }
+
+    private static Map<String, Object> line(UUID accountId, String currency, String opening, String openingSource,
+            String movement, String closing, String snapshot, String status) {
+        return Map.of("accountId", accountId.toString(), "currency", currency, "openingBalance", opening,
+                "openingSource", openingSource, "movement", movement, "closingBalance", closing,
+                "snapshot", snapshot, "status", status);
     }
 
     private static Map<String, Object> discrepancy(String kind, UUID accountId, String expected, String actual,

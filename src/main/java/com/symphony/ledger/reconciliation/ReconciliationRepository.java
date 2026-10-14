@@ -66,7 +66,7 @@ public class ReconciliationRepository {
                 .list();
     }
 
-    /** The run's row and its discrepancies. Snapshots reference the row, so it goes in first. */
+    /** The run's row, its account lines and its discrepancies. Snapshots reference the row, so it goes in first. */
     public void insert(ReconciliationReport report) {
         jdbc.sql("""
                 INSERT INTO reconciliations (id, period, trigger, status, accounts_checked, snapshots_created,
@@ -84,6 +84,22 @@ public class ReconciliationRepository {
                 .param("discrepancyCount", report.discrepancies().size())
                 .param("createdAt", report.createdAt().atOffset(ZoneOffset.UTC))
                 .update();
+        for (ReconciliationReport.AccountLine line : report.accounts()) {
+            jdbc.sql("""
+                    INSERT INTO reconciliation_accounts (reconciliation_id, account_id, opening_balance, opening_source,
+                                                         movement, closing_balance, snapshot, status)
+                    VALUES (:reconciliationId, :accountId, :opening, :openingSource, :movement, :closing, :snapshot, :status)
+                    """)
+                    .param("reconciliationId", report.id())
+                    .param("accountId", line.accountId())
+                    .param("opening", line.openingBalance())
+                    .param("openingSource", line.openingSource().name())
+                    .param("movement", line.movement())
+                    .param("closing", line.closingBalance())
+                    .param("snapshot", line.snapshot().name())
+                    .param("status", line.status().name())
+                    .update();
+        }
         for (ReconciliationReport.Discrepancy d : report.discrepancies()) {
             jdbc.sql("""
                     INSERT INTO reconciliation_discrepancies (reconciliation_id, account_id, kind, expected, actual, detail)
@@ -115,8 +131,26 @@ public class ReconciliationRepository {
                 .update();
     }
 
-    /** Discrepancies in the order the run found them. */
+    /** Account lines and discrepancies in the order the run produced them. */
     public Optional<ReconciliationReport> findById(UUID id) {
+        List<ReconciliationReport.AccountLine> lines = jdbc.sql("""
+                SELECT r.account_id, a.currency, r.opening_balance, r.opening_source, r.movement, r.closing_balance,
+                       r.snapshot, r.status
+                FROM reconciliation_accounts r JOIN accounts a ON a.id = r.account_id
+                WHERE r.reconciliation_id = :id
+                ORDER BY r.id
+                """)
+                .param("id", id)
+                .query((rs, n) -> new ReconciliationReport.AccountLine(
+                        rs.getObject("account_id", UUID.class),
+                        Currency.getInstance(rs.getString("currency")),
+                        rs.getBigDecimal("opening_balance"),
+                        ReconciliationReport.OpeningSource.valueOf(rs.getString("opening_source")),
+                        rs.getBigDecimal("movement"),
+                        rs.getBigDecimal("closing_balance"),
+                        ReconciliationReport.SnapshotResult.valueOf(rs.getString("snapshot")),
+                        ReconciliationReport.AccountStatus.valueOf(rs.getString("status"))))
+                .list();
         List<ReconciliationReport.Discrepancy> discrepancies = jdbc.sql("""
                 SELECT d.kind, d.account_id, a.currency, d.expected, d.actual, d.detail
                 FROM reconciliation_discrepancies d JOIN accounts a ON a.id = d.account_id
@@ -146,6 +180,7 @@ public class ReconciliationRepository {
                         rs.getInt("snapshots_created"),
                         rs.getInt("snapshots_verified"),
                         rs.getObject("created_at", OffsetDateTime.class).toInstant(),
+                        lines,
                         discrepancies))
                 .optional();
     }

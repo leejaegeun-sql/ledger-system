@@ -5,8 +5,12 @@ import com.symphony.ledger.common.ClockConfig;
 import com.symphony.ledger.common.Constraints;
 import com.symphony.ledger.common.LedgerException;
 import com.symphony.ledger.common.Money;
+import com.symphony.ledger.reconciliation.ReconciliationReport.AccountLine;
+import com.symphony.ledger.reconciliation.ReconciliationReport.AccountStatus;
 import com.symphony.ledger.reconciliation.ReconciliationReport.Discrepancy;
 import com.symphony.ledger.reconciliation.ReconciliationReport.Kind;
+import com.symphony.ledger.reconciliation.ReconciliationReport.OpeningSource;
+import com.symphony.ledger.reconciliation.ReconciliationReport.SnapshotResult;
 import com.symphony.ledger.reconciliation.ReconciliationRepository.AccountFigures;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -39,7 +43,7 @@ public class ReconciliationService {
 
     /**
      * Checks R1–R4 for every account created before the period ends, writes the snapshots that don't exist
-     * yet, and stores the report. All reads see one REPEATABLE READ snapshot, so postings during the run
+     * yet, and stores the report with one line per account. All reads see one REPEATABLE READ snapshot, so postings during the run
      * (dated after the period anyway) don't affect it. A stored snapshot is compared, never overwritten.
      */
     @Transactional(isolation = Isolation.REPEATABLE_READ)
@@ -50,26 +54,33 @@ public class ReconciliationService {
         }
         List<AccountFigures> accounts = repository.figures(period);
         List<AccountFigures> toSnapshot = new ArrayList<>();
+        List<AccountLine> lines = new ArrayList<>();
         List<Discrepancy> discrepancies = new ArrayList<>();
         int verified = 0;
 
         for (AccountFigures a : accounts) {
+            List<Discrepancy> found = new ArrayList<>();
             // R1. Without a previous snapshot the opening is computed from entries, so this always holds.
+            OpeningSource openingSource = a.previousClosing() != null ? OpeningSource.SNAPSHOT : OpeningSource.COMPUTED;
             BigDecimal opening = a.previousClosing() != null ? a.previousClosing() : a.beforeStart();
             BigDecimal rolledForward = opening.add(a.activity());
             if (rolledForward.compareTo(a.closing()) != 0) {
-                discrepancies.add(new Discrepancy(Kind.ROLLFORWARD_MISMATCH, a.accountId(), a.currency(),
+                found.add(new Discrepancy(Kind.ROLLFORWARD_MISMATCH, a.accountId(), a.currency(),
                         rolledForward, a.closing(), "Opening %s (%s snapshot) + activity %s = %s; recomputed closing %s"
                                 .formatted(format(opening, a), period.previous(), format(a.activity(), a),
                                         format(rolledForward, a), format(a.closing(), a))));
             }
             // R2. entry_count catches changes that cancel out in the sum.
+            SnapshotResult snapshot;
             if (a.storedClosing() == null) {
                 toSnapshot.add(a);
+                snapshot = SnapshotResult.CREATED;
             } else {
                 verified++;
+                snapshot = SnapshotResult.MATCHED;
                 if (a.storedClosing().compareTo(a.closing()) != 0 || a.storedCount() != a.closingCount()) {
-                    discrepancies.add(new Discrepancy(Kind.SNAPSHOT_MISMATCH, a.accountId(), a.currency(),
+                    snapshot = SnapshotResult.MISMATCHED;
+                    found.add(new Discrepancy(Kind.SNAPSHOT_MISMATCH, a.accountId(), a.currency(),
                             a.storedClosing(), a.closing(), "Stored closing %s (%s); recomputed %s (%s)".formatted(
                                     format(a.storedClosing(), a), entries(a.storedCount()),
                                     format(a.closing(), a), entries(a.closingCount()))));
@@ -77,22 +88,25 @@ public class ReconciliationService {
             }
             // R3
             if (a.balance().compareTo(a.allEntries()) != 0) {
-                discrepancies.add(new Discrepancy(Kind.CACHED_BALANCE_MISMATCH, a.accountId(), a.currency(),
+                found.add(new Discrepancy(Kind.CACHED_BALANCE_MISMATCH, a.accountId(), a.currency(),
                         a.allEntries(), a.balance(), "Cached balance %s; entries sum to %s"
                                 .formatted(format(a.balance(), a), format(a.allEntries(), a))));
             }
             // R4
             if (a.type() == AccountType.CUSTOMER && a.closing().signum() < 0) {
-                discrepancies.add(new Discrepancy(Kind.NEGATIVE_CLOSING_BALANCE, a.accountId(), a.currency(),
+                found.add(new Discrepancy(Kind.NEGATIVE_CLOSING_BALANCE, a.accountId(), a.currency(),
                         null, a.closing(), "Customer account closed %s at %s"
                                 .formatted(period, format(a.closing(), a))));
             }
+            lines.add(new AccountLine(a.accountId(), a.currency(), opening, openingSource, a.activity(), a.closing(),
+                    snapshot, found.isEmpty() ? AccountStatus.MATCHED : AccountStatus.DISCREPANCIES_FOUND));
+            discrepancies.addAll(found);
         }
 
         ReconciliationReport report = new ReconciliationReport(UUID.randomUUID(), period, trigger,
                 discrepancies.isEmpty() ? ReconciliationReport.Status.BALANCED
                         : ReconciliationReport.Status.DISCREPANCIES_FOUND,
-                accounts.size(), toSnapshot.size(), verified, now, List.copyOf(discrepancies));
+                accounts.size(), toSnapshot.size(), verified, now, List.copyOf(lines), List.copyOf(discrepancies));
         repository.insert(report);
         try {
             for (AccountFigures a : toSnapshot) {

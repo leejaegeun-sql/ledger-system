@@ -146,6 +146,7 @@ Flyway migrations in `src/main/resources/db/migration`:
 | `V1__schema.sql` | Tables, constraints, indexes, append-only triggers |
 | `V2__seed_system_accounts.sql` | The 8 system accounts from §3.3 |
 | `V3__seed_exchange_rates.sql` | The 12 directed currency pairs from §10.3 |
+| `V4__reconciliation_accounts.sql` | The per-account lines of a reconciliation report (§12.2) |
 
 ```sql
 -- V1__schema.sql (specification-level DDL)
@@ -247,6 +248,23 @@ CREATE TRIGGER entries_append_only           BEFORE UPDATE OR DELETE ON entries 
 CREATE TRIGGER transactions_append_only      BEFORE UPDATE OR DELETE ON transactions      FOR EACH ROW EXECUTE FUNCTION forbid_mutation();
 CREATE TRIGGER balance_snapshots_append_only BEFORE UPDATE OR DELETE ON balance_snapshots FOR EACH ROW EXECUTE FUNCTION forbid_mutation();
 CREATE TRIGGER exchange_rates_append_only    BEFORE UPDATE OR DELETE ON exchange_rates    FOR EACH ROW EXECUTE FUNCTION forbid_mutation();
+```
+
+```sql
+-- V4__reconciliation_accounts.sql
+
+CREATE TABLE reconciliation_accounts (
+    id                 BIGSERIAL     PRIMARY KEY,
+    reconciliation_id  UUID          NOT NULL REFERENCES reconciliations (id),
+    account_id         UUID          NOT NULL REFERENCES accounts (id),
+    opening_balance    NUMERIC(38,4) NOT NULL,
+    opening_source     VARCHAR(16)   NOT NULL CHECK (opening_source IN ('SNAPSHOT','COMPUTED')),
+    movement           NUMERIC(38,4) NOT NULL,     -- SUM(entries) with periodStart <= created_at < periodEnd
+    closing_balance    NUMERIC(38,4) NOT NULL,     -- SUM(entries) with created_at < periodEnd
+    snapshot           VARCHAR(16)   NOT NULL CHECK (snapshot IN ('CREATED','MATCHED','MISMATCHED')),
+    status             VARCHAR(32)   NOT NULL CHECK (status IN ('MATCHED','DISCREPANCIES_FOUND')),
+    CONSTRAINT reconciliation_accounts_uq UNIQUE (reconciliation_id, account_id)
+);
 ```
 
 Notes:
@@ -925,9 +943,33 @@ Location: /reconciliations/4c3b2a19-0f8e-4d7c-b6a5-948372615f0e
   "trigger": "MANUAL",
   "status": "DISCREPANCIES_FOUND",
   "accountsChecked": 10,
+  "accountsMatched": 9,
+  "accountsWithDiscrepancies": 1,
   "snapshotsCreated": 0,
   "snapshotsVerified": 10,
   "createdAt": "2026-10-14T07:15:00Z",
+  "accounts": [
+    {
+      "accountId": "00000000-0000-0000-0000-000000000101",
+      "currency": "SGD",
+      "openingBalance": "-400.00",
+      "openingSource": "SNAPSHOT",
+      "movement": "-100.00",
+      "closingBalance": "-500.00",
+      "snapshot": "MATCHED",
+      "status": "MATCHED"
+    },
+    {
+      "accountId": "a1111111-1111-4111-8111-111111111111",
+      "currency": "SGD",
+      "openingBalance": "400.00",
+      "openingSource": "SNAPSHOT",
+      "movement": "90.00",
+      "closingBalance": "490.00",
+      "snapshot": "MISMATCHED",
+      "status": "DISCREPANCIES_FOUND"
+    }
+  ],
   "discrepancies": [
     {
       "kind": "SNAPSHOT_MISMATCH",
@@ -939,6 +981,8 @@ Location: /reconciliations/4c3b2a19-0f8e-4d7c-b6a5-948372615f0e
   ]
 }
 ```
+
+`accounts` has one line per account checked, in account-id order (shortened to two lines above), as defined in §12.2. `accountsChecked = accountsMatched + accountsWithDiscrepancies`.
 
 | Status | When |
 |---|---|
@@ -1083,7 +1127,20 @@ R3  accounts.balance = Σ all entries      else CACHED_BALANCE_MISMATCH
 R4  customer: closing ≥ 0                 else NEGATIVE_CLOSING_BALANCE   [added]
 ```
 
-The run then saves one `reconciliations` row and its `reconciliation_discrepancies`, and returns the report.
+The run then saves one `reconciliations` row, one `reconciliation_accounts` line per account checked, and its `reconciliation_discrepancies`, and returns the report.
+
+Each account line shows:
+
+| Field | Value |
+|---|---|
+| `openingBalance` | `opening` above |
+| `openingSource` | `SNAPSHOT` (from `prev`) or `COMPUTED` (no previous snapshot) |
+| `movement` | `activity` above |
+| `closingBalance` | `closing` above. Equals opening + movement unless R1 failed. |
+| `snapshot` | `CREATED` by this run (R2 else-branch), or the existing snapshot `MATCHED` or `MISMATCHED` the recomputed closing |
+| `status` | `MATCHED` if the account has no discrepancy in this run, otherwise `DISCREPANCIES_FOUND` |
+
+The report also counts `accountsMatched` and `accountsWithDiscrepancies`. Lines are stored with the report, so `GET /reconciliations/{id}` returns them exactly as the run produced them.
 
 What each check catches. Entries are append-only, so most of these can only fail if something went wrong outside the application:
 
@@ -1156,7 +1213,7 @@ com.symphony.ledger
 
 ### 14.2 Tests
 
-Integration tests run against Testcontainers PostgreSQL, using one container per JVM (the singleton pattern) and a mutable `Clock`. Most share one database and assert only on rows they created. Tests that tamper with data, or assert a whole-ledger result (the integrity check, reconciliation), extend `FreshDatabaseTestBase` instead: before each test it creates a new database in the same container, points the application's DataSource at it, runs the Flyway migrations and drops the previous one.
+Integration tests run against Testcontainers PostgreSQL, using one container per JVM (the singleton pattern) and a mutable `Clock`. Most share one database and assert only on rows they created. Tests that tamper with data, or assert a whole-ledger result (the integrity check, reconciliation, and the concurrency tests, which end with `GET /ledger/integrity` = OK), extend `FreshDatabaseTestBase` instead: before each test it creates a new database in the same container, points the application's DataSource at it, runs the Flyway migrations and drops the previous one.
 
 | Area | Tests |
 |---|---|
@@ -1165,7 +1222,7 @@ Integration tests run against Testcontainers PostgreSQL, using one container per
 | Idempotency | Missing header → 400 `missing-idempotency-key`, with the `header` property and the explanation in `detail`. Sequential replay → 201 with the same `Location`, a body equal to the first response, `Idempotent-Replayed: true`, and no new rows. A replay after the transaction has been reversed still has `reversedByTransactionId: null`. Concurrent identical requests (a latch releases N threads) → N × 201, exactly one without `Idempotent-Replayed`, and one transaction. Same key with a different body → 409. Key reused across operations → 409. The "uses up the funds" race from §7.5 → a replay, not 422. A rejected request's key can be reused. |
 | Reversal | Exact negation, FX legs included, at the original rate after the rate has changed. Second reversal → 409. Reversing a reversal → 422. Destination already spent the money → 422. Concurrent reversals → one wins. |
 | Integrity | Clean ledger → OK. Each check is triggered by allowed tampering only (§4 notes), as in the table below. A test that tries to `UPDATE` or `DELETE` an entry gets the trigger's exception. |
-| Reconciliation | Clock moved across month ends. First run creates snapshots. Re-run verifies them. The backdated-transaction tamper test below. Current or future period → 422. Concurrent runs → one 409. Calling the scheduled job method directly. |
+| Reconciliation | Clock moved across month ends. First run creates snapshots. Re-run verifies them. Per-account lines show the opening and its source, movement, closing, snapshot result and status, and the report counts matched accounts and accounts with discrepancies. The backdated-transaction tamper test below. Current or future period → 422. Concurrent runs → one 409. Calling the scheduled job method directly. |
 | Unit | Money validation and formatting per currency, request-hash normalization, period parsing |
 
 How each integrity check is triggered in tests:
@@ -1235,7 +1292,7 @@ How each integrity check is triggered in tests:
 17. "Timestamp" for ordering and periods means the transaction's `created_at` from the application `Clock`, not the database commit time. Under concurrency, history order may differ slightly from commit order.
 18. Month-end means the UTC calendar month, whatever the customer's local time zone.
 19. If the app is down at 00:05 UTC on the 1st, that month's scheduled reconciliation is missed. It can be run manually. There is no catch-up.
-20. The first reconciliation of an account (no previous snapshot) uses an opening balance computed from entries. That is reported as `openingSource = COMPUTED`, not as a discrepancy.
+20. The first reconciliation of an account (no previous snapshot) uses an opening balance computed from entries. That is reported as `openingSource = COMPUTED` on the account's line in the report (§12.2), not as a discrepancy.
 21. The integrity check and reconciliation report discrepancies but never repair them.
 22. Both run synchronously and scan everything, which is acceptable at this project's data sizes.
 23. Request bodies may contain unknown JSON fields. They are ignored and are not part of the request hash.

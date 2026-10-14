@@ -5,7 +5,7 @@ import static org.awaitility.Awaitility.await;
 
 import com.jayway.jsonpath.JsonPath;
 import com.symphony.ledger.support.Concurrently;
-import com.symphony.ledger.support.IntegrationTestBase;
+import com.symphony.ledger.support.FreshDatabaseTestBase;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -33,10 +33,11 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 
 /**
  * Idempotency under concurrency, through the real HTTP API (DESIGN.md §7.4, §7.5, §14.2).
- * Concurrent requests are released together with a latch.
+ * Concurrent requests are released together with a latch. Each test runs on its own database and ends
+ * with a clean integrity check.
  */
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-class IdempotencyConcurrencyIT extends IntegrationTestBase {
+class IdempotencyConcurrencyIT extends FreshDatabaseTestBase {
 
     private static final UUID EXTERNAL_USD = UUID.fromString("00000000-0000-0000-0000-000000000102");
 
@@ -64,6 +65,7 @@ class IdempotencyConcurrencyIT extends IntegrationTestBase {
         assertThat(transactionsWithKey(key)).isEqualTo(1);
         assertThat(balance(alice)).isEqualByComparingTo("975.00");
         assertThat(balance(bob)).isEqualByComparingTo("25.00");
+        assertIntegrityOk();
     }
 
     /**
@@ -84,6 +86,7 @@ class IdempotencyConcurrencyIT extends IntegrationTestBase {
         assertThat(transactionsWithKey(key)).isEqualTo(1);
         assertThat(balance(alice)).isEqualByComparingTo("0");
         assertThat(balance(bob)).isEqualByComparingTo("30.00");
+        assertIntegrityOk();
     }
 
     /**
@@ -116,6 +119,7 @@ class IdempotencyConcurrencyIT extends IntegrationTestBase {
         assertThat(balance(bob)).isEqualByComparingTo("0");
         assertThat(balance(carol)).isEqualByComparingTo("10.00");
         assertThat(transactionsWithKey(key)).isEqualTo(1);
+        assertIntegrityOk();
     }
 
     /** As above, but the first rolls back: the waiting request goes ahead and keeps the key (DESIGN.md §7.5). */
@@ -143,6 +147,7 @@ class IdempotencyConcurrencyIT extends IntegrationTestBase {
         assertThat(balance(carol)).isEqualByComparingTo("0");
         assertThat(jdbc.sql("SELECT type FROM transactions WHERE idempotency_key = ?").param(key)
                 .query(String.class).single()).isEqualTo("TRANSFER");
+        assertIntegrityOk();
     }
 
     private record Result(int status, String location, String replayed, String body) {

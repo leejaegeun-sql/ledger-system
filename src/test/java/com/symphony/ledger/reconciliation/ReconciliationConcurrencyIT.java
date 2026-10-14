@@ -84,6 +84,7 @@ class ReconciliationConcurrencyIT extends FreshDatabaseTestBase {
                 "$.id");
         assertThat(countRows("reconciliations")).isEqualTo(1);
         assertThat(countRows("reconciliation_discrepancies")).isZero();
+        assertThat(countRows("reconciliation_accounts")).isEqualTo(SYSTEM_ACCOUNTS + 1);
         assertThat(jdbc.sql("SELECT DISTINCT reconciliation_id::text FROM balance_snapshots").query(String.class).list())
                 .containsExactly(winner);
         assertThat(countRows("balance_snapshots")).isEqualTo(SYSTEM_ACCOUNTS + 1);
