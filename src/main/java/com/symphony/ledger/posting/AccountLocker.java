@@ -16,6 +16,10 @@ import org.springframework.stereotype.Component;
  * <p>The order is decided by PostgreSQL in one statement. Never sort the IDs in Java and lock them one
  * by one: {@code UUID.compareTo} is signed, PostgreSQL's uuid order is unsigned, and mixing the two
  * can deadlock.
+ *
+ * <p>{@code FOR NO KEY UPDATE}, not {@code FOR UPDATE}: postings still wait for each other, but a foreign-key
+ * check on the account ({@code FOR KEY SHARE}) is not blocked, and a REPEATABLE READ reconciliation inserting
+ * rows that reference the account doesn't fail with a serialization error once the posting commits.
  */
 @Component
 public class AccountLocker {
@@ -34,7 +38,7 @@ public class AccountLocker {
                 FROM accounts
                 WHERE id IN (:ids)
                 ORDER BY id
-                FOR UPDATE
+                FOR NO KEY UPDATE
                 """)
                 .param("ids", ids)
                 .query((rs, n) -> new LockedAccount(

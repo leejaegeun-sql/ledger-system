@@ -287,19 +287,31 @@ class ReconciliationIT extends FreshDatabaseTestBase {
                         "expected", "50.00", "actual", "-100.00"));
     }
 
+    /**
+     * A manual run gets the same five-minute grace as the scheduled job (§12.1): until then, postings dated just
+     * before midnight may still be committing, and a snapshot taken without them would be wrong for good.
+     */
     @Test
-    void currentOrFuturePeriod_is422PeriodNotClosed_andWritesNothing() throws Exception {
+    void currentOrFuturePeriod_orWithinFiveMinutesOfItsEnd_is422PeriodNotClosed_andWritesNothing() throws Exception {
         createAccount("Alice", "SGD");
 
         expectProblem(reconcile("2026-10"), 422, "period-not-closed");
         expectProblem(reconcile("2027-01"), 422, "period-not-closed");
         clock.set(Instant.parse("2026-10-31T23:59:59.999999Z"));
         expectProblem(reconcile("2026-10"), 422, "period-not-closed");
+        clock.set(Instant.parse("2026-11-01T00:00:00Z"));
+        expectProblem(reconcile("2026-10"), 422, "period-not-closed");
+        clock.set(Instant.parse("2026-11-01T00:04:59.999999Z"));
+        reconcile("2026-10")
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.type").value("/problems/period-not-closed"))
+                .andExpect(jsonPath("$.period").value("2026-10"))
+                .andExpect(jsonPath("$.closesAt").value("2026-11-01T00:05:00Z"));
 
         assertThat(countRows("reconciliations")).isZero();
         assertThat(countRows("balance_snapshots")).isZero();
 
-        clock.set(Instant.parse("2026-11-01T00:00:00Z"));
+        clock.set(Instant.parse("2026-11-01T00:05:00Z"));
         reconcile("2026-10").andExpect(status().isCreated());
     }
 

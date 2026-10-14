@@ -97,21 +97,6 @@ class ReconciliationConcurrencyIT extends FreshDatabaseTestBase {
                 .andExpect(jsonPath("$.snapshotsVerified").value(SYSTEM_ACCOUNTS + 1));
     }
 
-    private void awaitBackendsWaitingOnLocks(int expected) throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
-        while (true) {
-            long waiting = jdbc.sql("""
-                    SELECT COUNT(*) FROM pg_stat_activity
-                    WHERE datname = current_database() AND wait_event_type = 'Lock'
-                    """).query(Long.class).single();
-            if (waiting >= expected) {
-                return;
-            }
-            assertThat(System.nanoTime()).as("%d runs blocked on the snapshot lock", expected).isLessThan(deadline);
-            Thread.sleep(20);
-        }
-    }
-
     private Result run(String period) throws Exception {
         HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/reconciliations"))
                 .timeout(Duration.ofSeconds(60))

@@ -1,6 +1,7 @@
 package com.symphony.ledger.reconciliation;
 
 import com.symphony.ledger.common.LedgerException;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
@@ -12,6 +13,12 @@ import java.util.regex.Pattern;
  * (DESIGN.md §12.1). Stored as its first day.
  */
 public record ReconciliationPeriod(YearMonth month) {
+
+    /**
+     * How long after its end a period stays open: postings that took their {@code created_at} just before
+     * midnight may still be committing (DESIGN.md §12.1). The scheduled job runs at the end of it (§12.4).
+     */
+    public static final Duration GRACE = Duration.ofMinutes(5);
 
     private static final Pattern FORMAT = Pattern.compile("\\d{4}-(0[1-9]|1[0-2])");
 
@@ -45,9 +52,14 @@ public record ReconciliationPeriod(YearMonth month) {
         return new ReconciliationPeriod(month.minusMonths(1));
     }
 
-    /** Only months before the current UTC month can be reconciled. */
+    /** When the period can first be reconciled: {@link #GRACE} after its end. */
+    public Instant closesAt() {
+        return end().plus(GRACE);
+    }
+
+    /** Manual and scheduled runs alike are accepted only from {@link #closesAt()}. */
     public boolean isClosedAt(Instant now) {
-        return !now.isBefore(end());
+        return !now.isBefore(closesAt());
     }
 
     /** {@code YYYY-MM}. */

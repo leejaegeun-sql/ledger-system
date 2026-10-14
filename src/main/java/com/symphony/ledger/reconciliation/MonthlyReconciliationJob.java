@@ -8,8 +8,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Reconciles the previous month at 00:05 UTC on the 1st (DESIGN.md §12.4). The five minutes cover postings
- * that took their {@code created_at} just before midnight but commit just after. Runs only when
+ * Reconciles the previous month at 00:05 UTC on the 1st (DESIGN.md §12.4), the moment the period closes
+ * ({@link ReconciliationPeriod#GRACE}). The five minutes cover postings that took their {@code created_at} just
+ * before midnight but commit just after. Runs only when
  * {@link SchedulingConfig} is on; tests call {@link #reconcilePreviousMonth()} directly.
  */
 @Component

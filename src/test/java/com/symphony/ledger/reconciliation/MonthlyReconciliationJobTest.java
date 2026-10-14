@@ -62,5 +62,7 @@ class MonthlyReconciliationJobTest {
         ZonedDateTime next = CronExpression.parse("0 5 0 1 * *")
                 .next(ZonedDateTime.parse("2026-10-14T06:30:00Z").withZoneSameInstant(ZoneOffset.UTC));
         assertThat(next.toInstant()).isEqualTo(Instant.parse("2026-11-01T00:05:00Z"));
+        // The job runs the moment the previous month closes, not before (§12.1).
+        assertThat(next.toInstant()).isEqualTo(ReconciliationPeriod.parse("2026-10").closesAt());
     }
 }

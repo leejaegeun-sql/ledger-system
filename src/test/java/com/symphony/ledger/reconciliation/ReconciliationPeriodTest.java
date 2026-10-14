@@ -45,14 +45,18 @@ class ReconciliationPeriodTest {
         assertThat(ReconciliationPeriod.parse("2027-01").previous()).isEqualTo(december);
     }
 
+    /** Closed five minutes after the month ends, the same grace as the scheduled job (DESIGN.md §12.1, §12.4). */
     @Test
-    void closed_onlyOnceTheMonthHasEnded() {
+    void closed_onlyFiveMinutesAfterTheMonthHasEnded() {
         ReconciliationPeriod october = ReconciliationPeriod.parse("2026-10");
 
+        assertThat(october.closesAt()).isEqualTo(Instant.parse("2026-11-01T00:05:00Z"));
         assertThat(october.isClosedAt(Instant.parse("2026-10-14T06:30:00Z"))).isFalse();
         assertThat(october.isClosedAt(Instant.parse("2026-10-31T23:59:59.999999Z"))).isFalse();
-        assertThat(october.isClosedAt(Instant.parse("2026-11-01T00:00:00Z"))).isTrue();
-        assertThat(ReconciliationPeriod.parse("2026-12").isClosedAt(Instant.parse("2026-11-01T00:00:00Z"))).isFalse();
+        assertThat(october.isClosedAt(Instant.parse("2026-11-01T00:00:00Z"))).isFalse();
+        assertThat(october.isClosedAt(Instant.parse("2026-11-01T00:04:59.999999Z"))).isFalse();
+        assertThat(october.isClosedAt(Instant.parse("2026-11-01T00:05:00Z"))).isTrue();
+        assertThat(ReconciliationPeriod.parse("2026-12").isClosedAt(Instant.parse("2026-11-01T00:05:00Z"))).isFalse();
     }
 
     @Test

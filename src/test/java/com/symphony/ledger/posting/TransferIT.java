@@ -15,7 +15,6 @@ import com.symphony.ledger.support.IntegrationTestBase;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -161,7 +160,7 @@ class TransferIT extends IntegrationTestBase {
         UUID bob = createAccount("Bob", "SGD");
         UUID carol = createAccount("Carol", "USD");
         fund(alice, "399.95");
-        LedgerState before = state(alice, bob, carol, FX_POOL_SGD, FX_POOL_USD);
+        LedgerState before = ledgerState();
 
         transfer(alice, bob, "\"1000.00\"", newKey())
                 .andExpect(status().isUnprocessableContent())
@@ -180,20 +179,20 @@ class TransferIT extends IntegrationTestBase {
                 .andExpect(status().isUnprocessableContent())
                 .andExpect(jsonPath("$.type").value("/problems/insufficient-funds"));
 
-        assertThat(state(alice, bob, carol, FX_POOL_SGD, FX_POOL_USD)).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
     }
 
     @Test
     void transfer_toSameAccount_returns400AndWritesNothing() throws Exception {
         UUID alice = createAccount("Alice", "SGD");
         fund(alice, "100.00");
-        LedgerState before = state(alice);
+        LedgerState before = ledgerState();
 
         transfer(alice, alice, "\"10.00\"", newKey())
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.type").value("/problems/same-account"));
 
-        assertThat(state(alice)).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
     }
 
     @Test
@@ -202,7 +201,7 @@ class TransferIT extends IntegrationTestBase {
         fund(alice, "100.00");
         UUID unknownSource = UUID.randomUUID();
         UUID unknownDestination = UUID.randomUUID();
-        LedgerState before = state(alice);
+        LedgerState before = ledgerState();
 
         transfer(unknownSource, alice, "\"10.00\"", newKey())
                 .andExpect(status().isNotFound())
@@ -216,22 +215,23 @@ class TransferIT extends IntegrationTestBase {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.accountId").value(unknownSource.toString()));
 
-        assertThat(state(alice)).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"\"0\"", "\"0.00\"", "\"-5.00\"", "-1", "\"10.001\"", "0.001", "\"1000000000000.01\""})
+    @ValueSource(strings = {"\"0\"", "\"0.00\"", "\"-5.00\"", "-1", "\"10.001\"", "0.001", "\"1000000000000.01\"",
+            "0.30000000000000001", "1000000000000.00001"})
     void transfer_invalidAmount_returns400AndWritesNothing(String amount) throws Exception {
         UUID alice = createAccount("Alice", "SGD");
         UUID bob = createAccount("Bob", "SGD");
         fund(alice, "100.00");
-        LedgerState before = state(alice, bob);
+        LedgerState before = ledgerState();
 
         transfer(alice, bob, amount, newKey())
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.type").value("/problems/invalid-amount"));
 
-        assertThat(state(alice, bob)).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
     }
 
     /** Decimal places are checked against the source currency. */
@@ -240,12 +240,12 @@ class TransferIT extends IntegrationTestBase {
         UUID yuki = createAccount("Yuki", "JPY");
         UUID alice = createAccount("Alice", "SGD");
         fund(yuki, "1000");
-        LedgerState before = state(yuki, alice, FX_POOL_JPY, FX_POOL_SGD);
+        LedgerState before = ledgerState();
 
         transfer(yuki, alice, "\"1.5\"", newKey())
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.type").value("/problems/invalid-amount"));
-        assertThat(state(yuki, alice, FX_POOL_JPY, FX_POOL_SGD)).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
 
         transfer(yuki, alice, "\"100.0\"", newKey())
                 .andExpect(status().isCreated())
@@ -266,7 +266,7 @@ class TransferIT extends IntegrationTestBase {
         UUID alice = createAccount("Alice", "SGD");
         UUID bob = createAccount("Bob", "SGD");
         fund(alice, "100.00");
-        LedgerState before = state(alice, bob);
+        LedgerState before = ledgerState();
 
         mvc.perform(withNewKey(post("/transactions"))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -274,7 +274,7 @@ class TransferIT extends IntegrationTestBase {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.type").value("/problems/validation-error"));
 
-        assertThat(state(alice, bob)).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
     }
 
     /** The one place these tests leave the key out on purpose: the 400 path for a missing or bad key (§7.1). */
@@ -283,7 +283,7 @@ class TransferIT extends IntegrationTestBase {
         UUID alice = createAccount("Alice", "SGD");
         UUID bob = createAccount("Bob", "SGD");
         fund(alice, "100.00");
-        LedgerState before = state(alice, bob);
+        LedgerState before = ledgerState();
 
         transfer(alice, bob, "\"10.00\"", null)
                 .andExpect(status().isBadRequest())
@@ -294,14 +294,14 @@ class TransferIT extends IntegrationTestBase {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.type").value("/problems/invalid-idempotency-key"));
 
-        assertThat(state(alice, bob)).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
     }
 
     @Test
     void transfer_involvingSystemAccount_returns422AndWritesNothing() throws Exception {
         UUID alice = createAccount("Alice", "SGD");
         fund(alice, "100.00");
-        LedgerState before = state(alice, EXTERNAL_SGD, FX_POOL_SGD);
+        LedgerState before = ledgerState();
 
         transfer(EXTERNAL_SGD, alice, "\"10.00\"", newKey())
                 .andExpect(status().isUnprocessableContent())
@@ -316,7 +316,7 @@ class TransferIT extends IntegrationTestBase {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.type").value("/problems/invalid-amount"));
 
-        assertThat(state(alice, EXTERNAL_SGD, FX_POOL_SGD)).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
     }
 
     /** The seeded rates take effect at the epoch, so none is in effect just before it. */
@@ -325,14 +325,14 @@ class TransferIT extends IntegrationTestBase {
         UUID alice = createAccount("Alice", "SGD");
         UUID bob = createAccount("Bob", "USD");
         fund(alice, "100.00");
-        LedgerState before = state(alice, bob, FX_POOL_SGD, FX_POOL_USD);
+        LedgerState before = ledgerState();
         clock.set(Instant.parse("1969-12-31T23:59:59Z"));
 
         transfer(alice, bob, "\"10.00\"", newKey())
                 .andExpect(status().isUnprocessableContent())
                 .andExpect(jsonPath("$.type").value("/problems/exchange-rate-not-found"));
 
-        assertThat(state(alice, bob, FX_POOL_SGD, FX_POOL_USD)).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
     }
 
     @Test
@@ -350,13 +350,13 @@ class TransferIT extends IntegrationTestBase {
         UUID eve = createAccount("Eve", "EUR");
         fund(yuki, "100");
         clock.set(future.plusSeconds(60));
-        LedgerState before = state(yuki, eve, FX_POOL_JPY, FX_POOL_EUR);
+        LedgerState before = ledgerState();
 
         // 1 × 0.004 = 0.004 EUR, which rounds to 0.00.
         transfer(yuki, eve, "\"1\"", newKey())
                 .andExpect(status().isUnprocessableContent())
                 .andExpect(jsonPath("$.type").value("/problems/amount-too-small"));
-        assertThat(state(yuki, eve, FX_POOL_JPY, FX_POOL_EUR)).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
 
         // 2 × 0.004 = 0.008 EUR, which rounds to 0.01.
         transfer(yuki, eve, "\"2\"", newKey())
@@ -385,19 +385,6 @@ class TransferIT extends IntegrationTestBase {
         assertThat(row.get(1)).isEqualTo(key);
         assertThat(row.get(2)).isEqualTo(
                 RequestHasher.sha256Hex("TRANSFER|source=" + alice + "|destination=" + bob + "|amount=10"));
-    }
-
-    /** Row counts plus the cached balances of the given accounts. Equal before and after means nothing was written. */
-    private record LedgerState(long transactions, long entries, List<BigDecimal> balances) {
-    }
-
-    private LedgerState state(UUID... accounts) {
-        return new LedgerState(countRows("transactions"), countRows("entries"),
-                Arrays.stream(accounts).map(this::cachedBalance).toList());
-    }
-
-    private BigDecimal cachedBalance(UUID accountId) {
-        return jdbc.sql("SELECT balance FROM accounts WHERE id = ?").param(accountId).query(BigDecimal.class).single();
     }
 
     private Map<String, BigDecimal> sumsByCurrency(UUID txId) {

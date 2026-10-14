@@ -18,7 +18,6 @@ import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -129,7 +128,7 @@ class ReversalIT extends IntegrationTestBase {
                 .andExpect(status().isCreated())
                 .andExpect(header().doesNotExist("Idempotent-Replayed"))
                 .andReturn().getResponse();
-        LedgerState before = state(alice, bob);
+        LedgerState before = ledgerState();
 
         MockHttpServletResponse second = reverse(original, key)
                 .andExpect(status().isCreated())
@@ -138,7 +137,7 @@ class ReversalIT extends IntegrationTestBase {
 
         assertThat(second.getHeader("Location")).isNotNull().isEqualTo(first.getHeader("Location"));
         JSONAssert.assertEquals(first.getContentAsString(), second.getContentAsString(), JSONCompareMode.STRICT);
-        assertThat(state(alice, bob)).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
         assertThat(balance(alice)).isEqualByComparingTo("100.00");
     }
 
@@ -150,13 +149,13 @@ class ReversalIT extends IntegrationTestBase {
         UUID second = createdId(deposit(alice, "\"20.00\"", newKey()));
         String key = newKey();
         reverse(first, key).andExpect(status().isCreated());
-        LedgerState before = state(alice);
+        LedgerState before = ledgerState();
 
         reverse(second, key)
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.type").value("/problems/idempotency-key-reused"));
 
-        assertThat(state(alice)).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
         assertThat(balance(alice)).isEqualByComparingTo("20.00");
     }
 
@@ -167,13 +166,13 @@ class ReversalIT extends IntegrationTestBase {
         fund(alice, "100.00");
         UUID original = createdId(transfer(alice, bob, "\"30.00\"", newKey()));
         reverse(original, newKey()).andExpect(status().isCreated());
-        LedgerState before = state(alice, bob);
+        LedgerState before = ledgerState();
 
         reverse(original, newKey())
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.type").value("/problems/transaction-already-reversed"));
 
-        assertThat(state(alice, bob)).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
         assertThat(balance(alice)).isEqualByComparingTo("100.00");
         assertThat(balance(bob)).isEqualByComparingTo("0");
     }
@@ -185,13 +184,13 @@ class ReversalIT extends IntegrationTestBase {
         fund(alice, "100.00");
         UUID original = createdId(transfer(alice, bob, "\"30.00\"", newKey()));
         UUID reversal = createdId(reverse(original, newKey()));
-        LedgerState before = state(alice, bob);
+        LedgerState before = ledgerState();
 
         reverse(reversal, newKey())
                 .andExpect(status().isUnprocessableContent())
                 .andExpect(jsonPath("$.type").value("/problems/reversal-not-allowed"));
 
-        assertThat(state(alice, bob)).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
     }
 
     /** Bob has already passed the money on, so taking it back would make him negative (DESIGN.md §5.4). */
@@ -203,7 +202,7 @@ class ReversalIT extends IntegrationTestBase {
         fund(alice, "100.00");
         UUID original = createdId(transfer(alice, bob, "\"30.00\"", newKey()));
         transfer(bob, carol, "\"25.00\"", newKey()).andExpect(status().isCreated());
-        LedgerState before = state(alice, bob, carol);
+        LedgerState before = ledgerState();
         String key = newKey();
 
         reverse(original, key)
@@ -214,7 +213,7 @@ class ReversalIT extends IntegrationTestBase {
                 .andExpect(jsonPath("$.required").value("30.00"))
                 .andExpect(jsonPath("$.currency").value("SGD"));
 
-        assertThat(state(alice, bob, carol)).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
         assertThat(jdbc.sql("SELECT COUNT(*) FROM transactions WHERE idempotency_key = ?")
                 .param(key).query(Long.class).single()).isZero();
         getTransaction(original).andExpect(jsonPath("$.reversedByTransactionId").value(nullValue()));
@@ -293,14 +292,14 @@ class ReversalIT extends IntegrationTestBase {
     @Test
     void reversal_ofUnknownTransaction_returns404AndWritesNothing() throws Exception {
         UUID unknown = UUID.randomUUID();
-        long transactions = countRows("transactions");
+        LedgerState before = ledgerState();
 
         reverse(unknown, newKey())
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.type").value("/problems/transaction-not-found"))
                 .andExpect(jsonPath("$.transactionId").value(unknown.toString()));
 
-        assertThat(countRows("transactions")).isEqualTo(transactions);
+        assertThat(ledgerState()).isEqualTo(before);
     }
 
     @Test
@@ -314,7 +313,7 @@ class ReversalIT extends IntegrationTestBase {
     void reversal_withoutValidIdempotencyKey_returns400AndWritesNothing() throws Exception {
         UUID alice = createAccount("Alice", "SGD");
         UUID deposit = createdId(deposit(alice, "\"10.00\"", newKey()));
-        LedgerState before = state(alice);
+        LedgerState before = ledgerState();
 
         reverse(deposit, null)
                 .andExpect(status().isBadRequest())
@@ -325,20 +324,7 @@ class ReversalIT extends IntegrationTestBase {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.type").value("/problems/invalid-idempotency-key"));
 
-        assertThat(state(alice)).isEqualTo(before);
-    }
-
-    /** Row counts plus the cached balances of the given accounts. Equal before and after means nothing was written. */
-    private record LedgerState(long transactions, long entries, List<BigDecimal> balances) {
-    }
-
-    private LedgerState state(UUID... accounts) {
-        return new LedgerState(countRows("transactions"), countRows("entries"),
-                Arrays.stream(accounts).map(this::cachedBalance).toList());
-    }
-
-    private BigDecimal cachedBalance(UUID accountId) {
-        return jdbc.sql("SELECT balance FROM accounts WHERE id = ?").param(accountId).query(BigDecimal.class).single();
+        assertThat(ledgerState()).isEqualTo(before);
     }
 
     /** The transaction row and its entry rows, every column, as stored. */

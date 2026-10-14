@@ -14,7 +14,7 @@
 - One idempotency key → at most one transaction; a transaction is reversed at most once; reversals aren't reversed.
 - A reversal's entries are exactly the original's negated. Only posting rules touch system accounts.
 - A rejected request leaves no trace (no rows, no stored key).
-- Lock accounts only via `AccountLocker` (one `ORDER BY id FOR UPDATE` query) — never sort UUIDs in Java.
+- Lock accounts only via `AccountLocker` (one `ORDER BY id FOR NO KEY UPDATE` query) — never sort UUIDs in Java.
 
 ## Rules
 - Never edit an existing Flyway migration, add a new one.

@@ -1,6 +1,7 @@
 package com.symphony.ledger.common;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.Currency;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -159,12 +160,13 @@ public class LedgerException extends RuntimeException {
         return value == null ? e : e.with("period", value);
     }
 
-    /** {@code period} and {@code current} are YYYY-MM. */
-    public static LedgerException periodNotClosed(String period, String current) {
+    /** {@code period} is YYYY-MM; {@code closesAt} is when it can first be reconciled (DESIGN.md §12.1). */
+    public static LedgerException periodNotClosed(String period, Instant closesAt) {
         return new LedgerException(HttpStatus.UNPROCESSABLE_CONTENT, "period-not-closed", "Period not closed",
-                "Period %s has not ended. Only months before the current UTC month (%s) can be reconciled."
-                        .formatted(period, current))
-                .with("period", period);
+                ("Period %s can be reconciled from %s: five minutes after it ends, so postings dated just before "
+                        + "the end have committed.").formatted(period, closesAt))
+                .with("period", period)
+                .with("closesAt", closesAt.toString());
     }
 
     public static LedgerException reconciliationNotFound(UUID reconciliationId) {

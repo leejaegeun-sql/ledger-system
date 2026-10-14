@@ -8,7 +8,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.jayway.jsonpath.JsonPath;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -159,5 +161,26 @@ public abstract class IntegrationTestBase {
 
     protected long countRows(String table) {
         return jdbc.sql("SELECT COUNT(*) FROM " + table).query(Long.class).single();
+    }
+
+    /** {@code accounts.balance}, read straight from the table. */
+    protected BigDecimal cachedBalance(UUID accountId) {
+        return jdbc.sql("SELECT balance FROM accounts WHERE id = ?").param(accountId).query(BigDecimal.class).single();
+    }
+
+    /**
+     * Row counts plus every account's cached balance, system accounts included. Equal before and after a
+     * rejected request means it left no trace: no transaction (so no stored key), no entries, no balance change
+     * (DESIGN.md §13 I13).
+     */
+    protected record LedgerState(long transactions, long entries, Map<UUID, BigDecimal> balances) {
+    }
+
+    protected LedgerState ledgerState() {
+        Map<UUID, BigDecimal> balances = jdbc.sql("SELECT id, balance FROM accounts")
+                .query((rs, n) -> Map.entry(rs.getObject("id", UUID.class), rs.getBigDecimal("balance")))
+                .list().stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+        return new LedgerState(countRows("transactions"), countRows("entries"), balances);
     }
 }

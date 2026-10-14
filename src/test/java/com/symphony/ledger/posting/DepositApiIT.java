@@ -104,52 +104,58 @@ class DepositApiIT extends IntegrationTestBase {
 
     @Test
     void deposit_toUnknownAccount_returns404AndWritesNothing() throws Exception {
-        long before = countRows("transactions");
+        LedgerState before = ledgerState();
 
         deposit(UUID.randomUUID(), "\"10.00\"", newKey())
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.type").value("/problems/account-not-found"));
 
-        assertThat(countRows("transactions")).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"\"0\"", "\"-5.00\"", "\"10.001\"", "\"1000000000000.01\"", "0.001"})
+    @ValueSource(strings = {"\"0\"", "\"-5.00\"", "\"10.001\"", "\"1000000000000.01\"", "0.001",
+            "0.30000000000000001", "1000000000000.00001"})
     void deposit_invalidAmount_returns400AndWritesNothing(String amount) throws Exception {
         UUID alice = createAccount("Alice", "SGD");
-        long before = countRows("transactions");
+        LedgerState before = ledgerState();
 
         deposit(alice, amount, newKey())
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.type").value("/problems/invalid-amount"));
 
-        assertThat(countRows("transactions")).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
         mvc.perform(get("/accounts/{id}", alice)).andExpect(jsonPath("$.balance").value("0.00"));
     }
 
     @Test
-    void deposit_fractionalAmountToJpyAccount_returns400() throws Exception {
+    void deposit_fractionalAmountToJpyAccount_returns400AndWritesNothing() throws Exception {
         UUID yuki = createAccount("Yuki", "JPY");
+        LedgerState before = ledgerState();
 
         deposit(yuki, "\"100.5\"", newKey())
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.type").value("/problems/invalid-amount"));
+        assertThat(ledgerState()).isEqualTo(before);
         deposit(yuki, "\"100.0\"", newKey()).andExpect(status().isCreated());
     }
 
     @Test
-    void deposit_missingAmount_returns400() throws Exception {
+    void deposit_missingAmount_returns400AndWritesNothing() throws Exception {
         UUID alice = createAccount("Alice", "SGD");
+        LedgerState before = ledgerState();
 
         deposit(alice, "null", newKey())
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.type").value("/problems/validation-error"));
+
+        assertThat(ledgerState()).isEqualTo(before);
     }
 
     @Test
     void deposit_withoutIdempotencyKey_returns400ExplainingTheHeader() throws Exception {
         UUID alice = createAccount("Alice", "SGD");
-        long before = countRows("transactions");
+        LedgerState before = ledgerState();
 
         deposit(alice, "\"10.00\"", null)
                 .andExpect(status().isBadRequest())
@@ -160,12 +166,13 @@ class DepositApiIT extends IntegrationTestBase {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.type").value("/problems/missing-idempotency-key"));
 
-        assertThat(countRows("transactions")).isEqualTo(before);
+        assertThat(ledgerState()).isEqualTo(before);
     }
 
     @Test
-    void deposit_withInvalidIdempotencyKey_returns400() throws Exception {
+    void deposit_withInvalidIdempotencyKey_returns400AndWritesNothing() throws Exception {
         UUID alice = createAccount("Alice", "SGD");
+        LedgerState before = ledgerState();
 
         deposit(alice, "\"10.00\"", "x".repeat(256))
                 .andExpect(status().isBadRequest())
@@ -174,12 +181,18 @@ class DepositApiIT extends IntegrationTestBase {
         deposit(alice, "\"10.00\"", "café")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.type").value("/problems/invalid-idempotency-key"));
+
+        assertThat(ledgerState()).isEqualTo(before);
     }
 
     @Test
-    void deposit_toSystemAccount_returns422() throws Exception {
+    void deposit_toSystemAccount_returns422AndWritesNothing() throws Exception {
+        LedgerState before = ledgerState();
+
         deposit(UUID.fromString(EXTERNAL_SGD), "\"10.00\"", newKey())
                 .andExpect(status().isUnprocessableContent())
                 .andExpect(jsonPath("$.type").value("/problems/system-account-not-allowed"));
+
+        assertThat(ledgerState()).isEqualTo(before);
     }
 }

@@ -106,7 +106,7 @@ class IdempotencyIT extends IntegrationTestBase {
         UUID bob = createAccount("Bob", "SGD");
         String key = newKey();
         deposit(alice, "\"10.00\"", key).andExpect(status().isCreated());
-        long transactions = countRows("transactions");
+        LedgerState before = ledgerState();
 
         deposit(alice, "\"20.00\"", key)
                 .andExpect(status().isConflict())
@@ -115,7 +115,7 @@ class IdempotencyIT extends IntegrationTestBase {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.type").value("/problems/idempotency-key-reused"));
 
-        assertThat(countRows("transactions")).isEqualTo(transactions);
+        assertThat(ledgerState()).isEqualTo(before);
         assertThat(balance(alice)).isEqualByComparingTo("10.00");
         assertThat(balance(bob)).isEqualByComparingTo("0");
     }
@@ -128,7 +128,7 @@ class IdempotencyIT extends IntegrationTestBase {
         fund(alice, "100.00");
         String key = newKey();
         transfer(alice, bob, "\"10.00\"", key).andExpect(status().isCreated());
-        long transactions = countRows("transactions");
+        LedgerState before = ledgerState();
 
         transfer(alice, bob, "\"10.01\"", key)
                 .andExpect(status().isConflict())
@@ -140,7 +140,7 @@ class IdempotencyIT extends IntegrationTestBase {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.type").value("/problems/idempotency-key-reused"));
 
-        assertThat(countRows("transactions")).isEqualTo(transactions);
+        assertThat(ledgerState()).isEqualTo(before);
         assertThat(balance(alice)).isEqualByComparingTo("90.00");
         assertThat(balance(bob)).isEqualByComparingTo("10.00");
         assertThat(balance(carol)).isEqualByComparingTo("0");
@@ -148,14 +148,14 @@ class IdempotencyIT extends IntegrationTestBase {
 
     /** The operation type is part of the hash, so a deposit's key reused for a transfer is a different body (§7.2). */
     @Test
-    void keyReusedAcrossOperations_returns409() throws Exception {
+    void keyReusedAcrossOperations_returns409AndWritesNothing() throws Exception {
         UUID alice = createAccount("Alice", "SGD");
         UUID bob = createAccount("Bob", "SGD");
         String depositKey = newKey();
         deposit(alice, "\"50.00\"", depositKey).andExpect(status().isCreated());
         String transferKey = newKey();
         transfer(alice, bob, "\"10.00\"", transferKey).andExpect(status().isCreated());
-        long transactions = countRows("transactions");
+        LedgerState before = ledgerState();
 
         transfer(alice, bob, "\"50.00\"", depositKey)
                 .andExpect(status().isConflict())
@@ -164,7 +164,7 @@ class IdempotencyIT extends IntegrationTestBase {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.type").value("/problems/idempotency-key-reused"));
 
-        assertThat(countRows("transactions")).isEqualTo(transactions);
+        assertThat(ledgerState()).isEqualTo(before);
     }
 
     /** A rejected request leaves no trace, including its key (DESIGN.md §7.5, I13). */
@@ -219,9 +219,5 @@ class IdempotencyIT extends IntegrationTestBase {
         assertThat(JsonPath.<String>read(second.getContentAsString(), "$.id"))
                 .isEqualTo(JsonPath.<String>read(first.getContentAsString(), "$.id"));
         JSONAssert.assertEquals(first.getContentAsString(), second.getContentAsString(), JSONCompareMode.STRICT);
-    }
-
-    private BigDecimal cachedBalance(UUID accountId) {
-        return jdbc.sql("SELECT balance FROM accounts WHERE id = ?").param(accountId).query(BigDecimal.class).single();
     }
 }

@@ -50,7 +50,7 @@ public class ReconciliationService {
     public ReconciliationReport reconcile(ReconciliationPeriod period, Trigger trigger) {
         Instant now = ClockConfig.now(clock);
         if (!period.isClosedAt(now)) {
-            throw LedgerException.periodNotClosed(period.toString(), ReconciliationPeriod.containing(now).toString());
+            throw LedgerException.periodNotClosed(period.toString(), period.closesAt());
         }
         List<AccountFigures> accounts = repository.figures(period);
         List<AccountFigures> toSnapshot = new ArrayList<>();

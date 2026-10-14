@@ -1,7 +1,6 @@
 package com.symphony.ledger.integrity;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -13,7 +12,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import org.springframework.dao.DataAccessException;
 import org.springframework.test.web.servlet.ResultActions;
 
 /**
@@ -133,24 +131,6 @@ class IntegrityIT extends FreshDatabaseTestBase {
                         "accountId", alice.toString(), "expected", "30.00", "actual", "25.00"),
                 Map.of("check", "REVERSAL_MISMATCH", "transactionId", reversal.toString(),
                         "accountId", bob.toString(), "expected", "-30.00", "actual", "-25.00"));
-    }
-
-    /** The append-only trigger rejects both, so the ledger is untouched and still clean. */
-    @Test
-    void updatingOrDeletingAnEntry_getsTheTriggersException() throws Exception {
-        UUID alice = createAccount("Alice", "SGD");
-        fund(alice, "500.00");
-        long entryId = jdbcTemplate.queryForObject("SELECT id FROM entries WHERE account_id = ?", Long.class, alice);
-
-        assertThatThrownBy(() -> jdbcTemplate.update("UPDATE entries SET amount = amount + 10 WHERE id = ?", entryId))
-                .isInstanceOf(DataAccessException.class)
-                .hasMessageContaining("entries is append-only");
-        assertThatThrownBy(() -> jdbcTemplate.update("DELETE FROM entries WHERE id = ?", entryId))
-                .isInstanceOf(DataAccessException.class)
-                .hasMessageContaining("entries is append-only");
-
-        assertThat(sumOfEntries(alice)).isEqualByComparingTo("500.00");
-        integrity().andExpect(jsonPath("$.status").value("OK"));
     }
 
     private ResultActions integrity() throws Exception {

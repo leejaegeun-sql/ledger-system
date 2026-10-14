@@ -63,7 +63,7 @@ Nothing else in this spec depends on the Boot version.
 
 The write path depends on things that JPA hides:
 
-- the exact SQL used for locking (`ORDER BY id FOR UPDATE` in a single statement, §6.2);
+- the exact SQL used for locking (`ORDER BY id FOR NO KEY UPDATE` in a single statement, §6.2);
 - the exact moment the unique-constraint violation is raised (on the `INSERT`, not at some later flush or commit, §7.4);
 - reading the violated constraint's name.
 
@@ -147,6 +147,7 @@ Flyway migrations in `src/main/resources/db/migration`:
 | `V2__seed_system_accounts.sql` | The 8 system accounts from §3.3 |
 | `V3__seed_exchange_rates.sql` | The 12 directed currency pairs from §10.3 |
 | `V4__reconciliation_accounts.sql` | The per-account lines of a reconciliation report (§12.2) |
+| `V5__append_only_truncate_and_reports.sql` | `TRUNCATE` triggers on the append-only tables; the reconciliation report tables made append-only |
 
 ```sql
 -- V1__schema.sql (specification-level DDL)
@@ -267,10 +268,28 @@ CREATE TABLE reconciliation_accounts (
 );
 ```
 
+```sql
+-- V5__append_only_truncate_and_reports.sql  [added]
+-- Row triggers don't fire on TRUNCATE, so each append-only table also gets a statement trigger.
+-- The reconciliation report tables become append-only too, so GET /reconciliations/{id} returns a run
+-- exactly as it was produced (§8.13).
+
+CREATE TRIGGER entries_no_truncate           BEFORE TRUNCATE ON entries           FOR EACH STATEMENT EXECUTE FUNCTION forbid_mutation();
+CREATE TRIGGER transactions_no_truncate      BEFORE TRUNCATE ON transactions      FOR EACH STATEMENT EXECUTE FUNCTION forbid_mutation();
+CREATE TRIGGER balance_snapshots_no_truncate BEFORE TRUNCATE ON balance_snapshots FOR EACH STATEMENT EXECUTE FUNCTION forbid_mutation();
+CREATE TRIGGER exchange_rates_no_truncate    BEFORE TRUNCATE ON exchange_rates    FOR EACH STATEMENT EXECUTE FUNCTION forbid_mutation();
+
+-- reconciliations, reconciliation_accounts, reconciliation_discrepancies: each gets
+--   <table>_append_only  BEFORE UPDATE OR DELETE  FOR EACH ROW
+--   <table>_no_truncate  BEFORE TRUNCATE          FOR EACH STATEMENT
+-- both executing forbid_mutation().
+```
+
 Notes:
 
 - **Source and destination** are not stored on `transactions`. They are derived from the entries (§5.5), so they cannot disagree with them.
 - **`accounts.balance`** is the only mutable money column. The `accounts_customer_non_negative` CHECK is a database-level backstop for the application's funds check.
+- **Append-only tables**: `entries`, `transactions`, `balance_snapshots`, `exchange_rates`, `reconciliations`, `reconciliation_accounts` and `reconciliation_discrepancies`. Triggers reject `UPDATE`, `DELETE` and `TRUNCATE` on each. They protect against mistakes, not against the table owner, who can drop them (§16.3).
 - **Testing tampering.** The integrity and reconciliation tests need to tamper with data. Test-only SQL (run with `JdbcTemplate`) may only do two things:
   - `INSERT` into the append-only tables;
   - `UPDATE accounts.balance`.
@@ -303,7 +322,7 @@ Notation: `A`/`B` are customer accounts. `amt` is the request amount, in the sou
 
 ### 5.3 Cross-currency transfer: `POST /transactions`, where ccy(A) = S ≠ ccy(B) = D
 
-`rate` is the rate for the pair (S → D) that is in effect at the transaction's `created_at` (§10). The destination amount is `dAmt = (amt × rate).setScale(digits(D), HALF_EVEN)`.
+`rate` is the rate for the pair (S → D) that the transfer reads inside its transaction, after taking its locks: the latest committed rate with `effective_from` ≤ the transaction's `created_at` (§10.1). It is stored on the transaction as `fx_rate`, which is the record of truth for the conversion (§10.2). The destination amount is `dAmt = (amt × rate).setScale(digits(D), HALF_EVEN)`.
 
 | Account | Amount | Currency |
 |---|---|---|
@@ -400,7 +419,7 @@ SELECT id, currency, type, balance
 FROM accounts
 WHERE id IN (:ids)
 ORDER BY id
-FOR UPDATE;
+FOR NO KEY UPDATE;
 ```
 
 `IN (:ids)` is `JdbcClient` expanding the ID collection into one placeholder per ID. It is equivalent to `id = ANY(:ids)` and avoids binding a `uuid[]`. What matters is that this is one statement with `ORDER BY id`.
@@ -409,6 +428,11 @@ FOR UPDATE;
 - **Do not sort the IDs in Java and lock them one by one.** `java.util.UUID.compareTo` compares signed 64-bit halves. PostgreSQL compares `uuid` as unsigned bytes. The two orders differ, and mixing them can deadlock.
 - Every write path locks only through this query, so all transactions take locks in the same global order. Wait cycles can't form, and there are no deadlocks.
 - Balances are read *after* the lock is taken, so the funds check sees the latest committed balance. Concurrent transfers out of the same account are serialized, and none of their updates is lost.
+- **`FOR NO KEY UPDATE`, not `FOR UPDATE`.** `FOR NO KEY UPDATE` conflicts with itself, so postings still wait for each other exactly as before. It doesn't conflict with `FOR KEY SHARE`, the lock a foreign-key check takes on the referenced account when a row pointing at it is inserted. A posting only changes `balance`, which is in no key, so `FOR NO KEY UPDATE` is also the lock its own `UPDATE` takes. With `FOR UPDATE`, PostgreSQL treats the later balance update as one that may have changed the key. Then:
+  - an insert referencing a locked account (a reconciliation's report lines and snapshots) waits for the posting to commit;
+  - under REPEATABLE READ it then fails with `40001 could not serialize access due to concurrent update`, because the account row changed after the run's snapshot.
+  
+  `ReconciliationUnderLoadIT` reproduces that interleaving.
 
 ### 6.3 Hot spots (accepted)
 
@@ -989,7 +1013,7 @@ Location: /reconciliations/4c3b2a19-0f8e-4d7c-b6a5-948372615f0e
 | 201 | Report created. Discrepancies do not change the status code. |
 | 400 | Period missing or not `YYYY-MM` with a month from 01 to 12 |
 | 409 | `reconciliation-in-progress`: a concurrent run for the same period won the snapshot insert. Retrying is safe. |
-| 422 | `period-not-closed`: the period is the current UTC month or later |
+| 422 | `period-not-closed`: the period ended less than 5 minutes ago, or is the current UTC month or later (§12.1) |
 
 ### 8.13 `GET /reconciliations/{id}`
 
@@ -1031,7 +1055,7 @@ Stack traces and SQL are never returned.
 | `amount-too-small` | 422 | The converted amount rounds to 0 |
 | `system-account-not-allowed` | 422 | |
 | `reversal-not-allowed` | 422 | |
-| `period-not-closed` | 422 | |
+| `period-not-closed` | 422 | The period ended less than 5 minutes ago, or hasn't ended (§12.1) |
 | `ledger-invariant-violation` | 500 | A pre-commit assertion failed (§5.6) |
 | `internal-error` | 500 | Anything else |
 
@@ -1061,7 +1085,8 @@ The default implementation is `DatabaseExchangeRateProvider`. It returns the row
 ### 10.2 Rules
 
 - **Directed pairs only [added].** S→D does not fall back to `1 / rate(D→S)`. Inverting would mean choosing a precision and a rounding mode for the inverse, and real buy and sell rates differ anyway. All 12 directed pairs are seeded.
-- **The rate is read inside the posting transaction** and stored on the transaction row. A `PUT` running at the same moment affects only transactions that read the rate after it commits.
+- **The rate is read inside the posting transaction, after the account locks,** and stored on the transaction row as `fx_rate`. A `PUT` running at the same moment affects only transactions that read the rate after it commits.
+- **`fx_rate` is the record of truth for which rate a transfer used; the rate history is not.** A `PUT` stamps `effective_from` with its own `now`, before it commits. A transfer that reads the rate between those two moments doesn't see the new rate, even when its `created_at` is later than that `effective_from`. For such a transfer, looking the history up at its `created_at` gives the newer rate, not the one it used. Nothing recomputes a conversion from the history: reversals copy the original entries (§5.4), and responses and history show `fx_rate`.
 - **Rate precision** is `NUMERIC(20,10)`. The product `amount × rate` is computed at full precision and then rounded once.
 - **Reversals never look up a rate** (§5.4).
 
@@ -1103,7 +1128,8 @@ The `currencies` block in the response answers the assignment's "total money in 
 ### 12.1 Period
 
 - A period is a UTC calendar month `[periodStart, periodEnd)`. For example, `2026-09` is `[2026-09-01T00:00Z, 2026-10-01T00:00Z)`. The end is exclusive.
-- A period is accepted only if `period < YearMonth.now(clock in UTC)`. The current month or a later one → 422.
+- A period is accepted only from `periodEnd + 5 minutes` (`closesAt`), by the `Clock`. Before that → 422 `period-not-closed`, which carries `period` and `closesAt`. The current month and later months are always rejected.
+- The 5 minutes **[added]** apply to manual runs (`POST /reconciliations`) and the scheduled job alike. Postings take their `created_at` after their locks and commit a moment later, so for a short time after midnight the previous month can still receive entries. A run in that window could miss one, and its snapshot is stored for good: every re-run would then report a false `SNAPSHOT_MISMATCH`, and the next month a false `ROLLFORWARD_MISMATCH`.
 
 ### 12.2 Algorithm
 
@@ -1154,6 +1180,7 @@ What each check catches. Entries are append-only, so most of these can only fail
 
 - Two runs for the same period can collide on `balance_snapshots_account_period_uq`. The loser gets 409 `reconciliation-in-progress`, and its transaction rolls back completely. Running again is safe: it verifies the snapshots the winner wrote.
 - Postings that happen during a run don't affect it. They are dated after `periodEnd`, and the run reads one snapshot.
+- Postings don't block the run, and the run doesn't block postings. The run's inserts check foreign keys against `accounts` with `FOR KEY SHARE`, which doesn't conflict with the postings' `FOR NO KEY UPDATE` (§6.2). That holds even for accounts whose balance changed after the run's snapshot.
 
 ### 12.4 Scheduled job
 
@@ -1162,7 +1189,7 @@ What each check catches. Entries are append-only, so most of these can only fail
 ```
 
 - Runs at **00:05 UTC** on the 1st of each month and reconciles the previous month, computed with the `Clock`.
-- The 5-minute delay **[added]** covers write transactions that took their `created_at` just before midnight but commit just after. Without it, the job could snapshot the month before those entries are visible. A later re-run would then report a false `SNAPSHOT_MISMATCH`.
+- 00:05 is the moment the previous month closes (§12.1). The 5-minute delay **[added]** covers write transactions that took their `created_at` just before midnight but commit just after. Without it, the job could snapshot the month before those entries are visible. A later re-run would then report a false `SNAPSHOT_MISMATCH`. Manual runs get the same delay.
 - The run is recorded with `trigger = SCHEDULED`.
 - If it gets 409, it logs and returns, because another run has the period.
 - Failures are logged at ERROR. There is no automatic retry.
@@ -1180,14 +1207,14 @@ These must hold after every committed transaction. Each one says where it is enf
 | I2 | For each currency, the sum of all balances is 0 | Follows from I1 and I3; integrity C1/C2 |
 | I3 | `accounts.balance = Σ entries.amount` for every account | Balance updated in the same transaction as the entry insert; integrity C3; reconciliation R3 |
 | I4 | Customer balances are ≥ 0 | Funds check after locking; pre-commit assertion; DB CHECK `accounts_customer_non_negative`; integrity C5 |
-| I5 | Entries and transactions are never updated or deleted | No such code paths; DB triggers |
+| I5 | Entries and transactions are never updated, deleted or truncated | No such code paths; DB triggers (§4) |
 | I6 | An entry's currency is its account's currency | Composite FK `entries_account_currency_fk` |
 | I7 | An idempotency key maps to at most one transaction | `transactions_idempotency_key_uq` |
 | I8 | A transaction is reversed at most once, and reversals are never reversed | `transactions_reverses_uq`; check after locking; 422 rule |
 | I9 | A reversal's entries are exactly the original's, negated | Posting rule (§5.4); integrity C7 |
 | I10 | Amounts have no more decimal places than their currency allows; entries are non-zero | Input validation; one HALF_EVEN rounding point; DB CHECK `amount <> 0` |
 | I11 | Only posting rules touch system accounts | API validation (§3.3) |
-| I12 | A snapshot, once written, is never changed | DB trigger; reconciliation compares and never overwrites |
+| I12 | A snapshot or reconciliation report, once written, is never changed | DB triggers (§4); reconciliation compares and never overwrites |
 | I13 | A rejected request leaves no trace: no rows and no stored key | Single `@Transactional` method; key stored only on the transaction row |
 
 ---
@@ -1217,13 +1244,14 @@ Integration tests run against Testcontainers PostgreSQL, using one container per
 
 | Area | Tests |
 |---|---|
-| Posting | Deposit, same-currency transfer and FX transfer produce the entries in §5; the FX example gives 74.16; a HALF_EVEN tie case; every 400/404/422 path writes nothing (count rows before and after) |
+| Posting | Deposit, same-currency transfer and FX transfer produce the entries in §5; the FX example gives 74.16; a HALF_EVEN tie case; every 400/404/409/422 path writes nothing: the `transactions` and `entries` row counts and every account's balance, system accounts included, are the same before and after. JSON number amounts that a round trip through `double` would change are rejected. |
 | Concurrency | 50 threads × N transfers between the same few accounts in both directions: no deadlock, no lost update, final balances exact, integrity clean. Many concurrent transfers draining one balance: exactly the affordable number succeed and the rest get 422. |
 | Idempotency | Missing header → 400 `missing-idempotency-key`, with the `header` property and the explanation in `detail`. Sequential replay → 201 with the same `Location`, a body equal to the first response, `Idempotent-Replayed: true`, and no new rows. A replay after the transaction has been reversed still has `reversedByTransactionId: null`. Concurrent identical requests (a latch releases N threads) → N × 201, exactly one without `Idempotent-Replayed`, and one transaction. Same key with a different body → 409. Key reused across operations → 409. The "uses up the funds" race from §7.5 → a replay, not 422. A rejected request's key can be reused. |
 | Reversal | Exact negation, FX legs included, at the original rate after the rate has changed. Second reversal → 409. Reversing a reversal → 422. Destination already spent the money → 422. Concurrent reversals → one wins. |
-| Integrity | Clean ledger → OK. Each check is triggered by allowed tampering only (§4 notes), as in the table below. A test that tries to `UPDATE` or `DELETE` an entry gets the trigger's exception. |
-| Reconciliation | Clock moved across month ends. First run creates snapshots. Re-run verifies them. Per-account lines show the opening and its source, movement, closing, snapshot result and status, and the report counts matched accounts and accounts with discrepancies. The backdated-transaction tamper test below. Current or future period → 422. Concurrent runs → one 409. Calling the scheduled job method directly. |
-| Unit | Money validation and formatting per currency, request-hash normalization, period parsing |
+| Integrity | Clean ledger → OK. Each check is triggered by allowed tampering only (§4 notes), as in the table below. |
+| Database guards | `UPDATE`, `DELETE` and `TRUNCATE … CASCADE` are each rejected by the trigger on every append-only table, and every row survives. An entry in a currency other than its account's fails `entries_account_currency_fk`. These run on a fresh database per test, so a missing trigger can only wipe that test's database. |
+| Reconciliation | Clock moved across month ends. First run creates snapshots. Re-run verifies them. Per-account lines show the opening and its source, movement, closing, snapshot result and status, and the report counts matched accounts and accounts with discrepancies. The backdated-transaction tamper test below. Current or future period, or less than 5 minutes after the period's end → 422; at exactly 5 minutes → 201. Concurrent runs → one 409. A run during which transfers, deposits and integrity checks commit on the accounts it reports on (made certain with a table lock) → 201 `BALANCED`, and every integrity check → OK. Calling the scheduled job method directly. |
+| Unit | Money validation and formatting per currency, request-hash normalization, period parsing. Each includes amounts that a round trip through `double` would change. |
 
 How each integrity check is triggered in tests:
 
@@ -1263,6 +1291,14 @@ How each integrity check is triggered in tests:
 6. Run `GET /ledger/integrity`. It reports OK. The backdated transaction is balanced and consistent, which is why month-end snapshots are needed to detect it.
 7. Move the clock to 2026-11-02 and reconcile `2026-10`. Expect a `ROLLFORWARD_MISMATCH` for both accounts. The opening balance comes from the stale September snapshot, but the closing balance includes the backdated entries.
 
+**Known test gaps (accepted).** These paths are covered by code review and the integrity check, but have no dedicated test:
+
+- **Reconciliation `entry_count` on its own (R2).** The backdated tamper test changes both the sum and the count, so a check that ignored `entry_count` would still pass. A test would need tampering that leaves the sum unchanged, such as a balanced pair of entries on one account.
+- **Integrity C6 for FX transfers and reversals.** Only the DEPOSIT case is triggered. The "TRANSFER with `fx_rate` = 4 entries" and "REVERSAL = the original's count" branches are not.
+- **Integrity C7 when an account appears on one side only.** Only amounts that differ on the same accounts are tested.
+- **A reversal racing the destination's spending.** The funds check under the lock is tested sequentially only, not with a concurrent transfer out of the destination.
+- **Same key, different body, overlapping accounts, concurrently, end to end.** The re-check after locking returns 409 here. Only the mocked `IdempotentExecutorTest` covers it.
+
 ### 14.3 README requirements
 
 - The README's API section opens with the same `Idempotency-Key` callout as §8.
@@ -1281,7 +1317,7 @@ How each integrity check is triggered in tests:
 6. A customer account starts at zero. There is no "opening balance" field; use a deposit.
 7. "Transfer" in the assignment and `POST /transactions` are the same operation.
 8. A transfer amount is always given in the source currency. The destination receives the converted, rounded amount.
-9. The rate used is the one in effect when the transaction is posted. It is quoted as 1 base = rate quote. There is no spread or fee, and the FX pools absorb rounding.
+9. The rate used is the one the transfer reads when it is posted, and it is stored on the transaction (§10.2). It is quoted as 1 base = rate quote. There is no spread or fee, and the FX pools absorb rounding.
 10. Rates can only take effect "now". Future-dated or backdated rates are not supported through the API.
 11. Reversals undo the whole transaction. There are no partial reversals or edits. A "correction" is a reversal followed by a new transaction.
 12. A reversal can fail (422) if the money has since been spent. Customer balances never go negative, including through a reversal.
@@ -1321,7 +1357,7 @@ There are no outright contradictions with the assignment.
 All accepted at review on 2026-10-14, along with `JdbcClient` and oldest-first history.
 
 1. **Transfers to or from system accounts.** Nothing in the brief stopped `POST /transactions` from using `EXTERNAL_SGD` (allowed to go negative) as a source, which would create money. They are now forbidden (422), and `POST /accounts` creates only customer accounts. (§3.3)
-2. **UUID lock order.** "Ascending id order" differs between Java (`UUID.compareTo`, signed) and PostgreSQL (unsigned bytes). Locks are therefore taken in a single `ORDER BY id FOR UPDATE` query. (§6.2)
+2. **UUID lock order.** "Ascending id order" differs between Java (`UUID.compareTo`, signed) and PostgreSQL (unsigned bytes). Locks are therefore taken in a single `ORDER BY id FOR NO KEY UPDATE` query. (§6.2)
 3. **The idempotency race combined with the funds check.** With only "unique constraint + catch", a concurrent duplicate whose twin used up the funds would get **422 instead of a replay**: it waits on the account locks and fails the funds check before it ever reaches the INSERT. The fix is to re-check the key after the locks are taken. (§7.4 step 5, §7.5)
 4. **Two unique constraints on `transactions`.** A violation of `reverses_transaction_id` must not be treated as an idempotent replay. The handler branches on the constraint name. (§7.4)
 5. **Request-hash definition.** The hash covers the operation type, the path IDs and the normalized amount, so `100` and `100.00` count as the same body. (§7.3)
@@ -1329,7 +1365,7 @@ All accepted at review on 2026-10-14, along with `JdbcClient` and oldest-first h
    - already reversed → 409;
    - reversing a reversal → 422;
    - system account in a transfer → 422;
-   - current or future reconciliation period → 422;
+   - current or future reconciliation period, or one that ended less than 5 minutes ago → 422;
    - malformed period → 400;
    - concurrent reconciliation → 409.
 7. **The converted amount can round to zero** (for example 1 JPY → EUR at a very low rate). This is rejected with 422 rather than posting a zero entry. (§5.3)
@@ -1338,14 +1374,14 @@ All accepted at review on 2026-10-14, along with `JdbcClient` and oldest-first h
 10. **Entry currency vs. account currency.** Nothing enforced that they match. A composite FK now does. (§4)
 11. **Database-level enforcement.**
     - A CHECK keeps customer balances non-negative.
-    - Triggers make entries, transactions, snapshots and rates append-only.
+    - Triggers make entries, transactions, snapshots, rates and reconciliation reports append-only, including against `TRUNCATE`.
     - CHECKs tie `type` to `reverses_transaction_id` and `fx_rate`.
 12. **Reconciliation details:**
     - the first period has no previous snapshot;
     - existing snapshots are never overwritten;
     - `entry_count` is stored alongside the closing balance;
     - concurrent runs are handled;
-    - the job runs at 00:05 rather than 00:00, to allow for late commits. (§12)
+    - a period closes 5 minutes after it ends, for manual runs and the job (which runs at 00:05), to allow for late commits. (§12)
 13. **Timestamp precision.** Values are truncated to microseconds so that they still compare equal after a round trip through PostgreSQL. (§3.5)
 14. **Account history.** The order is ascending, with entry `id` breaking ties. Each item carries source and destination so it makes sense on its own. (§8.7)
 15. **Amount format and limits.** Amounts are JSON strings in responses. Trailing zeros are allowed. The maximum is 10¹². (§3.4)
@@ -1360,3 +1396,4 @@ All accepted at review on 2026-10-14, along with `JdbcClient` and oldest-first h
 - **Reversals have no `reason` field.** One could be added to the transaction row (and to the request hash).
 - **There is no `GET /accounts` list endpoint.** The fixed system-account UUIDs are documented in §3.3 instead.
 - **There is no catch-up for missed scheduled reconciliations** (Assumption 19).
+- **The application connects as the role that owns the schema.** The same datasource runs Flyway, so the application's role can `ALTER`, `DROP` or `DISABLE` the append-only triggers and constraints. They guard against mistakes, not against that role. In production, migrations would run as a separate owner role. The application's role would get only `SELECT` and `INSERT` on the ledger tables and `UPDATE (balance)` on `accounts`, so it could neither change the schema nor `TRUNCATE`.
