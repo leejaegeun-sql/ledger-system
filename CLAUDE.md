@@ -19,3 +19,4 @@
 ## Rules
 - Never edit an existing Flyway migration, add a new one.
 - Write failing tests first; run ./mvnw verify before saying a task is done.
+- Commit directly on main; no feature branches.

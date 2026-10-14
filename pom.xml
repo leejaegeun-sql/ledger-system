@@ -45,8 +45,8 @@
         </dependency>
         <dependency>
             <groupId>org.postgresql</groupId>
+            <!-- compile scope: IdempotentExecutor reads the violated constraint from PSQLException (DESIGN.md §7.4) -->
             <artifactId>postgresql</artifactId>
-            <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>org.springdoc</groupId>

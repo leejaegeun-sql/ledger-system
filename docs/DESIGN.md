@@ -1141,7 +1141,7 @@ These must hold after every committed transaction. Each one says where it is enf
 com.symphony.ledger
 ├── account          AccountController, AccountService, AccountRepository
 ├── posting          TransactionController, PostingService (@Transactional writes),
-│                    IdempotentExecutor, RequestHasher, TransactionRepository, EntryRepository,
+│                    IdempotentExecutor, TransactionLookup, RequestHasher, TransactionRepository, EntryRepository,
 │                    AccountLocker (§6.2), PostingAssertions (§5.6)
 │                    AccountHistoryController, AccountHistoryService (§8.7)
 ├── fx               ExchangeRateController, ExchangeRateProvider, DatabaseExchangeRateProvider

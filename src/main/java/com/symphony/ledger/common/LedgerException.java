@@ -101,6 +101,24 @@ public class LedgerException extends RuntimeException {
                 .with("accountId", accountId);
     }
 
+    public static LedgerException transactionNotFound(UUID transactionId) {
+        return new LedgerException(HttpStatus.NOT_FOUND, "transaction-not-found", "Transaction not found",
+                "Transaction " + transactionId + " does not exist.")
+                .with("transactionId", transactionId);
+    }
+
+    public static LedgerException idempotencyKeyReused() {
+        return new LedgerException(HttpStatus.CONFLICT, "idempotency-key-reused", "Idempotency-Key reused",
+                "This Idempotency-Key was already used for a different request. Send the same request to "
+                        + "retry it, or a new key for a new request.")
+                .with("header", IDEMPOTENCY_KEY_HEADER);
+    }
+
+    public static LedgerException transactionAlreadyReversed() {
+        return new LedgerException(HttpStatus.CONFLICT, "transaction-already-reversed",
+                "Transaction already reversed", "The transaction has already been reversed.");
+    }
+
     /** {@code operation} is the endpoint, e.g. {@code POST /transactions}. */
     public static LedgerException missingIdempotencyKey(String operation) {
         return new LedgerException(HttpStatus.BAD_REQUEST, "missing-idempotency-key",

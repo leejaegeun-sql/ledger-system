@@ -56,6 +56,7 @@ public class PostingService {
         UUID external = SystemAccounts.external(account.currency());
 
         Map<UUID, AccountLocker.LockedAccount> locked = locker.lock(List.of(accountId, external));
+        recheckIdempotencyKey(idempotencyKey);
 
         Transaction tx = new Transaction(UUID.randomUUID(), TransactionType.DEPOSIT, idempotencyKey, requestHash,
                 null, null, ClockConfig.now(clock));
@@ -88,6 +89,7 @@ public class PostingService {
                 : List.of(sourceId, destinationId);
 
         Map<UUID, AccountLocker.LockedAccount> locked = locker.lock(lockIds);
+        recheckIdempotencyKey(idempotencyKey);
 
         Instant now = ClockConfig.now(clock);
         BigDecimal rate = null;
@@ -114,6 +116,17 @@ public class PostingService {
                         new Leg(destinationId, destinationAmount))
                 : List.of(new Leg(sourceId, amount.negate()), new Leg(destinationId, amount));
         return post(tx, legs, locked);
+    }
+
+    /**
+     * Runs after the locks, before any business rule (DESIGN.md §7.4 step 5). A concurrent duplicate that
+     * waited on our locks sees the first request's committed row here (READ COMMITTED takes a fresh
+     * snapshot per statement) and replays it, instead of failing the funds check the first one used up.
+     */
+    private void recheckIdempotencyKey(String idempotencyKey) {
+        transactions.findIdByIdempotencyKey(idempotencyKey).ifPresent(id -> {
+            throw new IdempotencyReplay(id);
+        });
     }
 
     /** Inserts the transaction and its entries, updates cached balances, then asserts the invariants. */
