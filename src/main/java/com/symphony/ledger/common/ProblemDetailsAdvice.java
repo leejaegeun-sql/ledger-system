@@ -16,6 +16,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 /** Renders every error as a ProblemDetail with {@code type = /problems/<code>} (DESIGN.md §9). */
@@ -48,6 +49,20 @@ public class ProblemDetailsAdvice extends ResponseEntityExceptionHandler {
                 .map(e -> Map.of("field", e.getField(), "message", String.valueOf(e.getDefaultMessage())))
                 .toList();
         ProblemDetail problem = validationError("The request body is invalid.");
+        problem.setProperty("errors", errors);
+        return ResponseEntity.badRequest().body(problem);
+    }
+
+    /** Constraint violations on request parameters, e.g. {@code size=101} on a paged endpoint. */
+    @Override
+    protected ResponseEntity<Object> handleHandlerMethodValidationException(HandlerMethodValidationException ex,
+            HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        List<Map<String, String>> errors = ex.getParameterValidationResults().stream()
+                .flatMap(result -> result.getResolvableErrors().stream()
+                        .map(e -> Map.of("field", String.valueOf(result.getMethodParameter().getParameterName()),
+                                "message", String.valueOf(e.getDefaultMessage()))))
+                .toList();
+        ProblemDetail problem = validationError("The request parameters are invalid.");
         problem.setProperty("errors", errors);
         return ResponseEntity.badRequest().body(problem);
     }

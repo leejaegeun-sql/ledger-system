@@ -1,5 +1,6 @@
 package com.symphony.ledger.posting;
 
+import com.symphony.ledger.common.LedgerException;
 import com.symphony.ledger.common.Money;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
@@ -34,6 +35,22 @@ public class TransactionController {
         return created(posting);
     }
 
+    /** The amount is in the source currency (DESIGN.md §8.5). */
+    @PostMapping("/transactions")
+    ResponseEntity<TransactionResponse> transfer(
+            @RequestHeader(name = IdempotencyKeys.HEADER, required = false) String idempotencyKey,
+            @Valid @RequestBody TransferRequest request) {
+        String key = IdempotencyKeys.require(idempotencyKey, "POST /transactions");
+        Money.requirePositiveWithinMax(request.amount());
+        if (request.sourceAccountId().equals(request.destinationAccountId())) {
+            throw LedgerException.sameAccount(request.sourceAccountId());
+        }
+        Posting posting = postings.transfer(request.sourceAccountId(), request.destinationAccountId(),
+                request.amount(), key,
+                RequestHasher.transfer(request.sourceAccountId(), request.destinationAccountId(), request.amount()));
+        return created(posting);
+    }
+
     private static ResponseEntity<TransactionResponse> created(Posting posting) {
         // reversedByTransactionId is always null on a newly created transaction.
         return ResponseEntity.created(URI.create("/transactions/" + posting.transaction().id()))
@@ -42,5 +59,10 @@ public class TransactionController {
 
     /** {@code amount} is a JSON string (preferred) or number, parsed straight to BigDecimal. */
     record DepositRequest(@NotNull BigDecimal amount) {
+    }
+
+    /** {@code amount} is a JSON string (preferred) or number, parsed straight to BigDecimal. */
+    record TransferRequest(@NotNull UUID sourceAccountId, @NotNull UUID destinationAccountId,
+            @NotNull BigDecimal amount) {
     }
 }

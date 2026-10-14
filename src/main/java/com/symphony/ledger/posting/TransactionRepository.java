@@ -1,6 +1,10 @@
 package com.symphony.ledger.posting;
 
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Collection;
+import java.util.List;
+import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -28,5 +32,26 @@ public class TransactionRepository {
                 .param("fxRate", tx.fxRate())
                 .param("createdAt", tx.createdAt().atOffset(ZoneOffset.UTC))
                 .update();
+    }
+
+    public List<Transaction> findByIds(Collection<UUID> ids) {
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.sql("""
+                SELECT id, type, idempotency_key, request_hash, reverses_transaction_id, fx_rate, created_at
+                FROM transactions
+                WHERE id IN (:ids)
+                """)
+                .param("ids", ids)
+                .query((rs, n) -> new Transaction(
+                        rs.getObject("id", UUID.class),
+                        TransactionType.valueOf(rs.getString("type")),
+                        rs.getString("idempotency_key"),
+                        rs.getString("request_hash"),
+                        rs.getObject("reverses_transaction_id", UUID.class),
+                        rs.getBigDecimal("fx_rate"),
+                        rs.getObject("created_at", OffsetDateTime.class).toInstant()))
+                .list();
     }
 }

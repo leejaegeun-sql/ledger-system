@@ -1,5 +1,7 @@
 package com.symphony.ledger.common;
 
+import java.math.BigDecimal;
+import java.util.Currency;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -54,6 +56,42 @@ public class LedgerException extends RuntimeException {
 
     public static LedgerException invalidAmount(String detail) {
         return new LedgerException(HttpStatus.BAD_REQUEST, "invalid-amount", "Invalid amount", detail);
+    }
+
+    public static LedgerException sameAccount(UUID accountId) {
+        return new LedgerException(HttpStatus.BAD_REQUEST, "same-account", "Same source and destination",
+                "Source and destination are both " + accountId + "; a transfer needs two different accounts.")
+                .with("accountId", accountId);
+    }
+
+    /** {@code available} and {@code required} are shown at the currency's scale, e.g. {@code "399.95"}. */
+    public static LedgerException insufficientFunds(UUID accountId, BigDecimal available, BigDecimal required,
+            Currency currency) {
+        String code = currency.getCurrencyCode();
+        String availableText = Money.format(available, currency);
+        String requiredText = Money.format(required, currency);
+        return new LedgerException(HttpStatus.UNPROCESSABLE_CONTENT, "insufficient-funds", "Insufficient funds",
+                "Account %s has %s %s; %s %s required.".formatted(accountId, availableText, code, requiredText, code))
+                .with("accountId", accountId)
+                .with("available", availableText)
+                .with("required", requiredText)
+                .with("currency", code);
+    }
+
+    public static LedgerException exchangeRateNotFound(Currency base, Currency quote) {
+        return new LedgerException(HttpStatus.UNPROCESSABLE_CONTENT, "exchange-rate-not-found",
+                "Exchange rate not found",
+                "No %s→%s exchange rate is in effect.".formatted(base.getCurrencyCode(), quote.getCurrencyCode()))
+                .with("base", base.getCurrencyCode())
+                .with("quote", quote.getCurrencyCode());
+    }
+
+    public static LedgerException amountTooSmall(BigDecimal amount, Currency source, Currency destination,
+            BigDecimal rate) {
+        return new LedgerException(HttpStatus.UNPROCESSABLE_CONTENT, "amount-too-small", "Amount too small",
+                "%s %s at rate %s converts to less than the smallest %s amount.".formatted(
+                        Money.format(amount, source), source.getCurrencyCode(), Money.normalize(rate),
+                        destination.getCurrencyCode()));
     }
 
     public static LedgerException systemAccountNotAllowed(UUID accountId) {

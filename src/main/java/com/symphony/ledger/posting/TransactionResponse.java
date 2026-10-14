@@ -1,6 +1,5 @@
 package com.symphony.ledger.posting;
 
-import com.symphony.ledger.account.SystemAccounts;
 import com.symphony.ledger.common.Money;
 import java.time.Instant;
 import java.util.List;
@@ -25,17 +24,11 @@ record TransactionResponse(
     record EntryResponse(long id, UUID accountId, String amount, String currency) {
     }
 
-    /**
-     * Source and destination are derived from the entries (DESIGN.md §5.5): leaving out FX pool
-     * entries, the one negative entry is the source and the one positive entry is the destination.
-     */
+    /** Source and destination are derived from the entries (DESIGN.md §5.5). */
     static TransactionResponse from(Posting posting, UUID reversedByTransactionId) {
         Transaction tx = posting.transaction();
-        List<Entry> ends = posting.entries().stream()
-                .filter(e -> !SystemAccounts.isFxPool(e.accountId()))
-                .toList();
-        Entry source = single(ends.stream().filter(e -> e.amount().signum() < 0).toList(), tx);
-        Entry destination = single(ends.stream().filter(e -> e.amount().signum() > 0).toList(), tx);
+        Entry source = posting.source();
+        Entry destination = posting.destination();
         return new TransactionResponse(
                 tx.id(),
                 tx.type(),
@@ -53,12 +46,5 @@ record TransactionResponse(
                         .map(e -> new EntryResponse(e.id(), e.accountId(), Money.format(e.amount(), e.currency()),
                                 e.currency().getCurrencyCode()))
                         .toList());
-    }
-
-    private static Entry single(List<Entry> candidates, Transaction tx) {
-        if (candidates.size() != 1) {
-            throw new IllegalStateException("Transaction " + tx.id() + " does not have exactly one source and destination");
-        }
-        return candidates.getFirst();
     }
 }

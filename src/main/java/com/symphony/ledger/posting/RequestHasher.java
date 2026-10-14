@@ -18,6 +18,11 @@ public final class RequestHasher {
         return sha256Hex("DEPOSIT|account=" + accountId + "|amount=" + Money.normalize(amount));
     }
 
+    public static String transfer(UUID sourceId, UUID destinationId, BigDecimal amount) {
+        return sha256Hex("TRANSFER|source=" + sourceId + "|destination=" + destinationId
+                + "|amount=" + Money.normalize(amount));
+    }
+
     static String sha256Hex(String canonical) {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8));

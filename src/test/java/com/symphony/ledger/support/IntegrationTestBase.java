@@ -1,9 +1,11 @@
 package com.symphony.ledger.support;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.jayway.jsonpath.JsonPath;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,6 +19,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
@@ -64,7 +67,7 @@ public abstract class IntegrationTestBase {
     }
 
     protected UUID createAccount(String name, String currency) throws Exception {
-        String body = mvc.perform(post("/accounts")
+        String body = mvc.perform(withNewKey(post("/accounts"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"%s\",\"currency\":\"%s\"}".formatted(name, currency)))
                 .andExpect(status().isCreated())
@@ -80,6 +83,48 @@ public abstract class IntegrationTestBase {
             request.header("Idempotency-Key", idempotencyKey);
         }
         return mvc.perform(request);
+    }
+
+    /** {@code amountJson} is the raw JSON value, e.g. {@code "\"10.00\""} or {@code 10.5}. A null key sends no header. */
+    protected ResultActions transfer(UUID sourceId, UUID destinationId, String amountJson, String idempotencyKey)
+            throws Exception {
+        var request = post("/transactions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"sourceAccountId\":\"%s\",\"destinationAccountId\":\"%s\",\"amount\":%s}"
+                        .formatted(sourceId, destinationId, amountJson));
+        if (idempotencyKey != null) {
+            request.header("Idempotency-Key", idempotencyKey);
+        }
+        return mvc.perform(request);
+    }
+
+    /** Deposits {@code amount} with a fresh key and expects 201. */
+    protected void fund(UUID accountId, String amount) throws Exception {
+        deposit(accountId, "\"" + amount + "\"", newKey()).andExpect(status().isCreated());
+    }
+
+    /** The cached balance, as returned by {@code GET /accounts/{id}}. */
+    protected BigDecimal balance(UUID accountId) throws Exception {
+        String body = mvc.perform(withNewKey(get("/accounts/{id}", accountId)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return new BigDecimal(JsonPath.<String>read(body, "$.balance"));
+    }
+
+    /** {@code SUM(entries.amount)} for the account, 0 if it has none. */
+    protected BigDecimal sumOfEntries(UUID accountId) {
+        return jdbc.sql("SELECT COALESCE(SUM(amount), 0) FROM entries WHERE account_id = ?")
+                .param(accountId)
+                .query(BigDecimal.class)
+                .single();
+    }
+
+    /**
+     * Adds a fresh Idempotency-Key. Endpoints that don't move money ignore it (DESIGN.md §7.1), so tests
+     * may send one on every request.
+     */
+    protected static MockHttpServletRequestBuilder withNewKey(MockHttpServletRequestBuilder request) {
+        return request.header("Idempotency-Key", newKey());
     }
 
     protected static String newKey() {

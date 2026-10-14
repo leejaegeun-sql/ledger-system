@@ -719,6 +719,7 @@ Returns one item per entry on this account (each transaction touches a given acc
 - **Order:** `entries.created_at ASC, entries.id ASC` — oldest first, with the entry ID breaking ties **[added: direction and tie-breaker column]**.
 - **Sign:** `amount` is signed from this account's point of view.
 - **Stable pages:** the data is append-only and the order is ascending, so offset pages stay stable while new activity arrives (it is added at the end).
+- **One snapshot per page:** `totalItems` and the page are read in one `REPEATABLE_READ` read-only transaction, so they agree with each other.
 
 ```http
 GET /accounts/a1111111-1111-4111-8111-111111111111/transactions?page=0&size=20
@@ -1142,6 +1143,7 @@ com.symphony.ledger
 ├── posting          TransactionController, PostingService (@Transactional writes),
 │                    IdempotentExecutor, RequestHasher, TransactionRepository, EntryRepository,
 │                    AccountLocker (§6.2), PostingAssertions (§5.6)
+│                    AccountHistoryController, AccountHistoryService (§8.7)
 ├── fx               ExchangeRateController, ExchangeRateProvider, DatabaseExchangeRateProvider
 ├── integrity        IntegrityController, IntegrityService
 ├── reconciliation   ReconciliationController, ReconciliationService, MonthlyReconciliationJob
