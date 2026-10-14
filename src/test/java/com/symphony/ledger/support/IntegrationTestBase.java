@@ -18,6 +18,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -28,11 +29,15 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
  * shared by every subclass, plus a {@link MutableClock} reset before each test.
  *
  * <p>The database is not cleaned between tests. Tests create their own accounts and assert
- * on those, or compare row counts before and after.
+ * on those, or compare row counts before and after. Tests that tamper with data or assert on the
+ * whole ledger extend {@link FreshDatabaseTestBase} instead.
+ *
+ * <p>The scheduled reconciliation is off in every test context (DESIGN.md §12.4).
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import(TestClockConfig.class)
+@TestPropertySource(properties = "ledger.reconciliation.scheduling-enabled=false")
 public abstract class IntegrationTestBase {
 
     /** Same tag as docker-compose.yml. */

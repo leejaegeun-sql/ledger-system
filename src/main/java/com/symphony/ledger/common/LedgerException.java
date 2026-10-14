@@ -151,4 +151,33 @@ public class LedgerException extends RuntimeException {
                         + "again when you retry it.")
                 .with("header", IDEMPOTENCY_KEY_HEADER);
     }
+
+    /** {@code value} is what the client sent, possibly null. */
+    public static LedgerException invalidPeriod(String value) {
+        LedgerException e = new LedgerException(HttpStatus.BAD_REQUEST, "invalid-period", "Invalid period",
+                "Period must be YYYY-MM with a month from 01 to 12, for example 2026-09.");
+        return value == null ? e : e.with("period", value);
+    }
+
+    /** {@code period} and {@code current} are YYYY-MM. */
+    public static LedgerException periodNotClosed(String period, String current) {
+        return new LedgerException(HttpStatus.UNPROCESSABLE_CONTENT, "period-not-closed", "Period not closed",
+                "Period %s has not ended. Only months before the current UTC month (%s) can be reconciled."
+                        .formatted(period, current))
+                .with("period", period);
+    }
+
+    public static LedgerException reconciliationNotFound(UUID reconciliationId) {
+        return new LedgerException(HttpStatus.NOT_FOUND, "reconciliation-not-found", "Reconciliation not found",
+                "Reconciliation " + reconciliationId + " does not exist.")
+                .with("reconciliationId", reconciliationId);
+    }
+
+    /** {@code period} is YYYY-MM. */
+    public static LedgerException reconciliationInProgress(String period) {
+        return new LedgerException(HttpStatus.CONFLICT, "reconciliation-in-progress", "Reconciliation in progress",
+                "Another reconciliation of " + period + " wrote this period's snapshots first. Retrying is safe: "
+                        + "the next run verifies them.")
+                .with("period", period);
+    }
 }

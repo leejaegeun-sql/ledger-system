@@ -32,6 +32,10 @@ public final class SystemAccounts {
         return FX_POOL.get(currency.getCurrencyCode());
     }
 
+    public static boolean isExternal(UUID accountId) {
+        return EXTERNAL.containsValue(accountId);
+    }
+
     public static boolean isFxPool(UUID accountId) {
         return FX_POOL.containsValue(accountId);
     }

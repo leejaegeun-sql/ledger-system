@@ -1,10 +1,9 @@
 package com.symphony.ledger.posting;
 
+import com.symphony.ledger.common.Constraints;
 import com.symphony.ledger.common.LedgerException;
 import java.util.Optional;
 import java.util.function.Supplier;
-import org.postgresql.util.PSQLException;
-import org.postgresql.util.ServerErrorMessage;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 
@@ -40,7 +39,7 @@ public class IdempotentExecutor {
                     .orElseThrow(() -> new IllegalStateException("Transaction " + e.transactionId() + " vanished"));
             return replay(stored, requestHash);
         } catch (DataIntegrityViolationException e) {
-            String constraint = violatedConstraint(e);
+            String constraint = Constraints.violated(e);
             if (KEY_CONSTRAINT.equals(constraint)) {
                 // Another request with this key committed while ours was in flight.
                 return replay(lookup.findByKey(key).orElseThrow(() -> e), requestHash);
@@ -58,17 +57,6 @@ public class IdempotentExecutor {
             throw LedgerException.idempotencyKeyReused();
         }
         return new Outcome(stored, true);
-    }
-
-    /** Read from the driver's error fields, never from message text. Null if it isn't a PostgreSQL error. */
-    private static String violatedConstraint(Throwable e) {
-        for (Throwable t = e; t != null; t = t.getCause()) {
-            if (t instanceof PSQLException psql) {
-                ServerErrorMessage message = psql.getServerErrorMessage();
-                return message == null ? null : message.getConstraint();
-            }
-        }
-        return null;
     }
 
     /** {@code replayed} is true when {@code posting} was committed by an earlier request with the same key. */

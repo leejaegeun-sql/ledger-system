@@ -19,3 +19,9 @@ springdoc:
     path: /swagger-ui.html
   api-docs:
     path: /v3/api-docs
+
+ledger:
+  reconciliation:
+    # The month-end job (DESIGN.md §12.4), at 00:05 UTC on the 1st unless ledger.reconciliation.cron says otherwise.
+    # Off in tests.
+    scheduling-enabled: true

@@ -873,7 +873,7 @@ HTTP/1.1 200 OK
 
 ### 8.11 `GET /ledger/integrity`
 
-Runs the checks in §11 and returns **200 whether or not discrepancies are found**. The check itself succeeded; the result is in `status`.
+Runs the checks in §11 and returns **200 whether or not discrepancies are found**. The check itself succeeded; the result is in `status`: `OK` or `DISCREPANCIES_FOUND`. `currencies` always lists SGD, USD, EUR and JPY, in that order. Each discrepancy carries `check` plus only the fields listed for that check in §11.
 
 ```http
 HTTP/1.1 200 OK
@@ -1047,7 +1047,7 @@ The check runs in one `@Transactional(readOnly = true, isolation = REPEATABLE_RE
 | C3 | For each account, `balance = Σ entries.amount` (accounts with no entries count as 0) | `CACHED_BALANCE_MISMATCH` {accountId, currency, expected = Σ entries, actual = balance, difference} |
 | C4 | For each transaction and currency, `Σ entries.amount = 0` | `TRANSACTION_UNBALANCED` {transactionId, currency, actual} |
 | C5 | For each customer account, `balance ≥ 0` | `NEGATIVE_CUSTOMER_BALANCE` {accountId, actual} |
-| C6 **[added]** | Each transaction has the expected number of entries: DEPOSIT 2, TRANSFER 2 or 4, REVERSAL = the original's count | `UNEXPECTED_ENTRY_COUNT` {transactionId, expected, actual} |
+| C6 **[added]** | Each transaction has the expected number of entries: DEPOSIT 2, TRANSFER 2 (no `fx_rate`) or 4 (with one), REVERSAL = the original's count | `UNEXPECTED_ENTRY_COUNT` {transactionId, expected, actual} |
 | C7 **[added]** | Each reversal's entries are exactly the original's entries negated, matched by account | `REVERSAL_MISMATCH` {transactionId, accountId, expected, actual} |
 
 The `currencies` block in the response answers the assignment's "total money in the ledger matches the expected sum". Under double entry the expected net is 0. Also, `customerTotal = −(externalTotal + fxPoolTotal)`, so the money held by customers equals the net money brought in from outside plus the house's FX position.
@@ -1156,7 +1156,7 @@ com.symphony.ledger
 
 ### 14.2 Tests
 
-Integration tests run against Testcontainers PostgreSQL, using one container per JVM (the singleton pattern) and a mutable `Clock`.
+Integration tests run against Testcontainers PostgreSQL, using one container per JVM (the singleton pattern) and a mutable `Clock`. Most share one database and assert only on rows they created. Tests that tamper with data, or assert a whole-ledger result (the integrity check, reconciliation), extend `FreshDatabaseTestBase` instead: before each test it creates a new database in the same container, points the application's DataSource at it, runs the Flyway migrations and drops the previous one.
 
 | Area | Tests |
 |---|---|
