@@ -150,8 +150,18 @@ curl -s -X POST localhost:8080/accounts/$ALICE/deposits \
   "reversedByTransactionId": null,
   "createdAt": "2026-10-14T13:27:43.481456Z",
   "entries": [
-    { "id": 1, "accountId": "00000000-0000-0000-0000-000000000101", "amount": "-500.00", "currency": "SGD" },
-    { "id": 2, "accountId": "1e06bef0-ed7b-4bc6-891f-013f3b34fbdb", "amount": "500.00", "currency": "SGD" }
+    {
+      "id": 1,
+      "accountId": "00000000-0000-0000-0000-000000000101",
+      "amount": "-500.00",
+      "currency": "SGD"
+    },
+    {
+      "id": 2,
+      "accountId": "1e06bef0-ed7b-4bc6-891f-013f3b34fbdb",
+      "amount": "500.00",
+      "currency": "SGD"
+    }
   ]
 }
 ```
@@ -299,8 +309,16 @@ curl -s -X POST localhost:8080/transactions \
   "fxRate": "0.7412",
   "entries": [
     { "accountId": "<Alice>", "amount": "-100.05", "currency": "SGD" },
-    { "accountId": "00000000-0000-0000-0000-000000000201", "amount": "100.05", "currency": "SGD" },
-    { "accountId": "00000000-0000-0000-0000-000000000202", "amount": "-74.16", "currency": "USD" },
+    {
+      "accountId": "00000000-0000-0000-0000-000000000201",
+      "amount": "100.05",
+      "currency": "SGD"
+    },
+    {
+      "accountId": "00000000-0000-0000-0000-000000000202",
+      "amount": "-74.16",
+      "currency": "USD"
+    },
     { "accountId": "<Bob>", "amount": "74.16", "currency": "USD" }
   ]
 }
@@ -320,10 +338,34 @@ curl -s localhost:8080/ledger/integrity | jq
   "checkedAt": "2026-10-14T13:31:02.118374Z",
   "status": "OK",
   "currencies": [
-    { "currency": "SGD", "customerTotal": "399.95", "externalTotal": "-500.00", "fxPoolTotal": "100.05", "net": "0.00" },
-    { "currency": "USD", "customerTotal": "74.16", "externalTotal": "0.00", "fxPoolTotal": "-74.16", "net": "0.00" },
-    { "currency": "EUR", "customerTotal": "0.00", "externalTotal": "0.00", "fxPoolTotal": "0.00", "net": "0.00" },
-    { "currency": "JPY", "customerTotal": "0", "externalTotal": "0", "fxPoolTotal": "0", "net": "0" }
+    {
+      "currency": "SGD",
+      "customerTotal": "399.95",
+      "externalTotal": "-500.00",
+      "fxPoolTotal": "100.05",
+      "net": "0.00"
+    },
+    {
+      "currency": "USD",
+      "customerTotal": "74.16",
+      "externalTotal": "0.00",
+      "fxPoolTotal": "-74.16",
+      "net": "0.00"
+    },
+    {
+      "currency": "EUR",
+      "customerTotal": "0.00",
+      "externalTotal": "0.00",
+      "fxPoolTotal": "0.00",
+      "net": "0.00"
+    },
+    {
+      "currency": "JPY",
+      "customerTotal": "0",
+      "externalTotal": "0",
+      "fxPoolTotal": "0",
+      "net": "0"
+    }
   ],
   "discrepancies": []
 }
@@ -391,25 +433,30 @@ curl -s -X PUT localhost:8080/exchange-rates \
 ```json
 {
   "rates": [
-    { "base": "SGD", "quote": "EUR", "rate": "0.682", "effectiveFrom": "2026-10-14T13:31:05.442153Z" }
+    {
+      "base": "SGD",
+      "quote": "EUR",
+      "rate": "0.682",
+      "effectiveFrom": "2026-10-14T13:31:05.442153Z"
+    }
   ]
 }
 ```
 
 ### All endpoints
 
-| Method and path | Purpose | Key |
-|---|---|---|
-| `POST /accounts` | Create a customer account | — |
-| `GET /accounts/{id}` | Account and cached balance (system accounts too) | — |
-| `POST /accounts/{id}/deposits` | Deposit from `EXTERNAL_<CCY>` | required |
-| `GET /accounts/{id}/transactions` | Account history, oldest first, `?page=&size=` | — |
-| `POST /transactions` | Transfer, same or cross currency | required |
-| `GET /transactions/{id}` | Transaction with its entries | — |
-| `POST /transactions/{id}/reversals` | Reverse a transaction | required |
-| `GET /exchange-rates` / `PUT /exchange-rates` | Current rates / set rates | — |
-| `GET /ledger/integrity` | Integrity check | — |
-| `POST /reconciliations` / `GET /reconciliations/{id}` | Run / read a month-end reconciliation | — |
+| Method and path                                       | Purpose                                          | Key      |
+| ----------------------------------------------------- | ------------------------------------------------ | -------- |
+| `POST /accounts`                                      | Create a customer account                        | —        |
+| `GET /accounts/{id}`                                  | Account and cached balance (system accounts too) | —        |
+| `POST /accounts/{id}/deposits`                        | Deposit from `EXTERNAL_<CCY>`                    | required |
+| `GET /accounts/{id}/transactions`                     | Account history, oldest first, `?page=&size=`    | —        |
+| `POST /transactions`                                  | Transfer, same or cross currency                 | required |
+| `GET /transactions/{id}`                              | Transaction with its entries                     | —        |
+| `POST /transactions/{id}/reversals`                   | Reverse a transaction                            | required |
+| `GET /exchange-rates` / `PUT /exchange-rates`         | Current rates / set rates                        | —        |
+| `GET /ledger/integrity`                               | Integrity check                                  | —        |
+| `POST /reconciliations` / `GET /reconciliations/{id}` | Run / read a month-end reconciliation            | —        |
 
 Errors are `application/problem+json` (RFC 9457), with `type` set to `/problems/<code>`. The codes are in §9.
 
@@ -681,15 +728,34 @@ From §15 of the spec:
 
 ## How I used AI
 
-I used Claude Code (Claude Opus) throughout, as a pair programmer working against a written spec.
+The assignment encouraged AI, so I used it throughout, but I kept the
+decisions and the verification with me.
 
-- **Spec as the source of truth.** The work is driven by [docs/DESIGN.md](docs/DESIGN.md). I made the open
-  decisions myself at review (the required `Idempotency-Key`, the 201 replay, the reversal restrictions), and
-  they are recorded in §16. The ledger invariants and project rules are in `CLAUDE.md`, so every session
-  started from them.
-- **Tests first, in small steps.** Each feature is a separate commit: failing tests, then the code, then
-  `./mvnw verify`. Every commit is marked as co-authored with Claude.
-- **Review.** A review of the implementation against the spec found the `FOR UPDATE` foreign-key conflict, the
-  missing `TRUNCATE` triggers and several test gaps. They were fixed test-first, or recorded as known gaps.
-- **What I checked myself.** The concurrency and idempotency reasoning (§6, §7.5), the posting rules, and the
-  curl examples in this README, which were run against a live instance.
+**Learning the domain.** I hadn't built a financial ledger before. Before
+writing any code, I used Claude to learn the core concepts (double-entry
+bookkeeping, idempotent requests, and how concurrent updates lose money
+without locking) until I could explain them in my own words.
+
+**Design.** I chose the approach and the key rules: a double-entry,
+append-only ledger; pessimistic locking in a fixed order; required
+idempotency keys; reversals at the original amounts; and FX through pool
+accounts. Claude Code wrote these up as `docs/DESIGN.md` and flagged gaps in
+my brief. One example: Java and PostgreSQL sort UUIDs differently, which
+could have caused deadlocks. I settled every open question before any code
+was written.
+
+**Implementation.** Claude Code wrote the code in small milestones, each
+committed separately. For every milestone, I required the tests to be
+written first and shown failing, and the implementation then had to make
+them pass without changing them.
+
+**Verification.** Once the features were done, I had a separate AI reviewer,
+with no context from writing the code, check it against the spec. It flagged
+a subtle PostgreSQL issue: `FOR UPDATE` row locks conflict with foreign-key
+checks, so month-end reconciliation would fail while transfers were running.
+I had a failing test written to confirm the bug before fixing it with
+`FOR NO KEY UPDATE`. A final audit mapped every requirement to the code and
+the test that proves it, which led to the rollback and fan-in tests.
+
+Every design decision and trade-off in this repository is one I chose and
+can explain, and every claim in this README is backed by a test.
